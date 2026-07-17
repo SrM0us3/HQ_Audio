@@ -1,0 +1,16 @@
+{
+  "name": "Balão — leitor de quadrinho com voz",
+  "short_name": "Balão",
+  "description": "Leitor de quadrinhos (CBZ) com zoom em balões e leitura em voz alta",
+  "start_url": "./balao.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait-primary",
+  "background_color": "#15171c",
+  "theme_color": "#15171c",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "icon-512-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}
