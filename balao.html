@@ -1,0 +1,1625 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<script>
+// Detector de erro visível — escrito em JS bem antigo (ES5) de propósito,
+// pra funcionar mesmo em navegadores muito antigos/incomuns e mostrar
+// na tela qualquer erro que trave o app, em vez de falhar em silêncio.
+window.onerror = function(msg, url, line, col, err) {
+  try {
+    var el = document.getElementById('js-error-banner');
+    if (!el) {
+      el = document.createElement('div');
+      el.id = 'js-error-banner';
+      el.style.cssText = 'position:fixed;top:0;left:0;right:0;z-index:99999;' +
+        'background:#c0392b;color:#fff;font-family:monospace;font-size:12px;' +
+        'padding:10px;white-space:pre-wrap;word-break:break-word;';
+      document.body ? document.body.appendChild(el) : document.documentElement.appendChild(el);
+    }
+    el.textContent = 'ERRO DE JAVASCRIPT (linha ' + line + '): ' + msg;
+  } catch (e) {}
+  return false;
+};
+</script>
+
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Balão — quadrinho com voz</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Bangers&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.0.4/tesseract.min.js"></script>
+<style>
+  :root{
+    --bg:#15171c;
+    --panel:#1f222a;
+    --panel-2:#262a33;
+    --page-bg:#e8e3d6;
+    --accent:#e4402c;
+    --accent-dim:#7a2a20;
+    --gold:#d9a94a;
+    --text:#edeae2;
+    --text-dim:#8a8f9c;
+    --border:#2b2f38;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;}
+  body{
+    margin:0;background:var(--bg);color:var(--text);
+    font-family:'Inter',system-ui,sans-serif;
+    overflow:hidden;overscroll-behavior:none;
+  }
+  #app{height:100vh;height:100dvh;display:flex;flex-direction:column;}
+
+  /* ---------- Topbar ---------- */
+  .topbar{
+    display:flex;align-items:center;gap:10px;
+    padding:12px 14px;border-bottom:1px solid var(--border);
+    background:var(--panel);flex-shrink:0;z-index:20;
+  }
+  .brand{
+    font-family:'Bangers',cursive;letter-spacing:1px;
+    font-size:26px;color:var(--accent);
+    text-shadow:2px 2px 0 var(--accent-dim);
+  }
+  .topbar .sub{color:var(--text-dim);font-size:12px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .iconbtn{
+    background:var(--panel-2);border:1px solid var(--border);color:var(--text);
+    width:32px;height:32px;border-radius:9px;font-size:14px;
+    display:flex;align-items:center;justify-content:center;cursor:pointer;
+  }
+  .iconbtn:active{transform:scale(.94);}
+  .iconbtn.on{background:var(--accent);border-color:var(--accent);}
+  .iconbtn:disabled{opacity:.4;pointer-events:none;}
+  .iconbtn.warn{position:relative;}
+  .iconbtn.warn::after{
+    content:'';position:absolute;top:-2px;right:-2px;width:10px;height:10px;border-radius:50%;
+    background:var(--accent);border:2px solid var(--panel);animation:pulse 1.6s infinite;
+  }
+  @keyframes pulse{0%,100%{opacity:1;}50%{opacity:.35;}}
+
+  /* ---------- Library screen ---------- */
+  #screen-library{flex:1;overflow-y:auto;padding:18px;display:none;}
+  #screen-library.active{display:block;}
+  .drop{
+    border:2px dashed var(--border);border-radius:16px;padding:34px 18px;
+    text-align:center;color:var(--text-dim);margin-bottom:22px;
+  }
+  .drop b{color:var(--text);}
+  .btn-primary{
+    background:var(--accent);color:#fff;border:none;border-radius:10px;
+    padding:12px 18px;font-weight:700;font-size:15px;cursor:pointer;margin-top:12px;
+  }
+  .btn-primary:active{transform:scale(.97);}
+  .lib-item{
+    display:flex;align-items:center;gap:12px;padding:12px;border-radius:12px;
+    background:var(--panel);border:1px solid var(--border);margin-bottom:10px;
+  }
+  .lib-thumb{
+    width:44px;height:58px;border-radius:4px;background:var(--gold);
+    display:flex;align-items:center;justify-content:center;font-family:'Bangers';
+    color:#2b2205;font-size:18px;flex-shrink:0;
+  }
+  .lib-meta{flex:1;overflow:hidden;}
+  .lib-meta .name{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+  .lib-meta .stat{color:var(--text-dim);font-size:12px;margin-top:2px;}
+  .lib-del{color:var(--text-dim);background:none;border:none;font-size:18px;cursor:pointer;padding:6px;}
+  .section-label{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--text-dim);margin:18px 0 8px;}
+
+  /* ---------- Reader screen ---------- */
+  #screen-reader{flex:1;display:none;flex-direction:column;overflow:hidden;position:relative;}
+  #screen-reader.active{display:flex;}
+  #stage{
+    flex:1;position:relative;overflow:hidden;background:#0c0d10;
+    touch-action:none;
+  }
+  #pageWrap{position:absolute;left:0;top:0;transform-origin:0 0;will-change:transform;transition:transform .38s cubic-bezier(.2,.8,.2,1);}
+  #pageImg{display:block;background:var(--page-bg);user-select:none;-webkit-user-drag:none;touch-action:none;}
+  #overlay{position:absolute;inset:0;touch-action:none;}
+  .balloon{
+    position:absolute;border:2px solid var(--gold);border-radius:10px;
+    background:rgba(217,169,74,.14);
+  }
+  .balloon.active{border-color:var(--accent);background:rgba(228,64,44,.18);}
+  .balloon .tag{
+    position:absolute;top:-11px;left:-11px;width:22px;height:22px;border-radius:50%;
+    background:var(--gold);color:#2b2205;font-family:'Bangers';font-size:13px;
+    display:flex;align-items:center;justify-content:center;line-height:1;
+  }
+  .balloon.active .tag{background:var(--accent);color:#fff;}
+
+  .draft-box{
+    position:absolute;border:2px solid var(--accent);border-radius:6px;
+    background:rgba(228,64,44,.15);touch-action:none;cursor:move;
+  }
+  .draft-handle{
+    position:absolute;width:32px;height:32px;margin:-16px;
+    background:transparent;touch-action:none;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .draft-handle::after{
+    content:'';width:14px;height:14px;border-radius:50%;
+    background:var(--accent);border:2px solid #fff;
+    box-shadow:0 1px 4px rgba(0,0,0,.5);
+  }
+  .draft-handle.nw{left:0;top:0;} .draft-handle.ne{left:100%;top:0;}
+  .draft-handle.sw{left:0;top:100%;} .draft-handle.se{left:100%;top:100%;}
+
+  #draftToolbar{
+    position:absolute;left:50%;bottom:76px;transform:translateX(-50%);
+    display:none;gap:10px;z-index:25;align-items:center;
+  }
+  #draftToolbar button{
+    padding:11px 18px;border-radius:999px;border:none;font-weight:700;font-size:13px;cursor:pointer;
+    box-shadow:0 2px 10px rgba(0,0,0,.35);
+  }
+  #draftPos{
+    background:rgba(0,0,0,.55);color:var(--text);font-size:12px;padding:6px 10px;border-radius:999px;
+    font-family:'Bangers';letter-spacing:.5px;
+  }
+  #draftPos:empty{display:none;}
+  #draftToolbar #btnDraftOk{background:var(--accent);color:#fff;}
+  #draftToolbar #btnDraftText{background:var(--gold);color:#2b2205;}
+  #draftToolbar #btnDraftCancel{background:var(--panel-2);color:var(--text);border:1px solid var(--border);}
+
+  #balloonCard{
+    position:absolute;z-index:22;border-radius:14px;overflow:hidden;
+    box-shadow:0 8px 28px rgba(0,0,0,.55);border:3px solid var(--gold);
+    cursor:pointer;background:var(--page-bg);
+    transition:left .25s ease,top .25s ease,width .25s ease,height .25s ease;
+  }
+  #balloonCard img{display:block;width:100%;height:100%;object-fit:contain;background:var(--page-bg);}
+
+  #liteEditBar{
+    position:absolute;left:12px;right:12px;bottom:76px;z-index:26;
+    display:flex;gap:8px;align-items:flex-end;
+    background:var(--panel);border:1px solid var(--border);border-radius:14px;
+    padding:10px;box-shadow:0 6px 20px rgba(0,0,0,.4);
+  }
+  #liteEditBar textarea{
+    flex:1;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:10px;font-size:14px;font-family:inherit;resize:none;
+    min-height:60px;max-height:150px;
+  }
+  #liteEditBar button{
+    background:var(--accent);color:#fff;border:none;border-radius:50%;
+    width:44px;height:44px;flex-shrink:0;font-size:16px;font-weight:700;cursor:pointer;
+  }
+
+  .path-line{position:absolute;pointer-events:none;stroke:var(--gold);stroke-width:2;stroke-dasharray:4 5;fill:none;opacity:.55;}
+
+  /* ---------- Bottom controls ---------- */
+  .ctrlbar{
+    display:flex;align-items:center;gap:5px;padding:8px 8px;
+    border-top:1px solid var(--border);background:var(--panel);flex-shrink:0;z-index:20;
+    overflow-x:auto;
+  }
+  .ctrlbar .iconbtn{flex-shrink:0;}
+  .ctrlbar .spacer{flex:1;min-width:4px;}
+  .pagepos{font-size:12px;color:var(--text-dim);min-width:40px;text-align:center;}
+  .mode-pill{
+    font-size:11px;text-transform:uppercase;letter-spacing:.5px;
+    padding:6px 10px;border-radius:999px;background:var(--panel-2);color:var(--text-dim);
+  }
+  .mode-pill.marking{background:var(--gold);color:#2b2205;}
+  .mode-pill.playing{background:var(--accent);color:#fff;}
+
+  /* ---------- Balloon sheet ---------- */
+  #sheet{
+    position:absolute;left:0;right:0;bottom:0;background:var(--panel);
+    border-top:1px solid var(--border);border-radius:16px 16px 0 0;
+    max-height:60%;transform:translateY(105%);transition:transform .25s ease;
+    z-index:30;display:flex;flex-direction:column;
+  }
+  #sheet.open{transform:translateY(0);}
+  .sheet-head{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);}
+  .sheet-head b{flex:1;}
+  .sheet-body{padding:14px 16px;overflow-y:auto;}
+  .balloon-item{
+    display:flex;align-items:center;gap:8px;background:var(--panel-2);
+    border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin-bottom:8px;
+  }
+  .balloon-item .num-input{
+    width:34px;height:30px;border-radius:8px;background:var(--gold);color:#2b2205;
+    font-family:'Bangers';display:flex;align-items:center;justify-content:center;flex-shrink:0;font-size:15px;
+    border:none;text-align:center;padding:0;-moz-appearance:textfield;
+  }
+  .balloon-item .num-input::-webkit-outer-spin-button,
+  .balloon-item .num-input::-webkit-inner-spin-button{-webkit-appearance:none;margin:0;}
+  .balloon-item .txt{flex:1;font-size:13px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+  .balloon-item button{background:none;border:none;color:var(--text-dim);font-size:15px;padding:4px;cursor:pointer;}
+  textarea.edit-text{
+    width:100%;background:var(--panel-2);border:1px solid var(--border);border-radius:8px;
+    color:var(--text);padding:10px;font-size:14px;font-family:inherit;resize:vertical;min-height:70px;
+  }
+  .row{display:flex;gap:8px;margin-top:10px;}
+  .row button{
+    flex:1;padding:10px;border-radius:8px;border:1px solid var(--border);background:var(--panel-2);
+    color:var(--text);font-weight:600;font-size:13px;cursor:pointer;
+  }
+  .row button.primary{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .row button.ocr{background:var(--gold);border-color:var(--gold);color:#2b2205;}
+  .row button:disabled{opacity:.5;pointer-events:none;}
+  .empty-hint{color:var(--text-dim);font-size:13px;text-align:center;padding:20px 6px;}
+
+  select, input[type=range]{width:100%;}
+  .settings-row{margin-bottom:16px;}
+  .settings-row label{display:block;font-size:12px;color:var(--text-dim);margin-bottom:6px;}
+  select{
+    background:var(--panel-2);color:var(--text);border:1px solid var(--border);
+    border-radius:8px;padding:10px;font-size:14px;
+  }
+  .toast{
+    position:absolute;left:50%;top:14px;transform:translateX(-50%);
+    background:var(--panel-2);border:1px solid var(--border);color:var(--text);
+    padding:8px 14px;border-radius:999px;font-size:12px;z-index:50;opacity:0;transition:opacity .25s;
+    pointer-events:none;font-variant-numeric:tabular-nums;white-space:nowrap;
+  }
+  .toast.show{opacity:1;}
+  #fileInput{display:none;}
+</style>
+</head>
+<body>
+<div id="app">
+
+  <div class="topbar">
+    <button class="iconbtn" id="btnBack" title="Biblioteca" style="display:none">🏠</button>
+    <div class="brand">BALÃO</div>
+    <div class="sub" id="topSub">leitor de quadrinho com voz</div>
+    <button class="iconbtn" id="btnDownload" title="Baixar CBZ com marcações" style="display:none">⬇</button>
+    <button class="iconbtn" id="btnSettings" title="Voz">⚙</button>
+  </div>
+
+  <!-- LIBRARY -->
+  <div id="screen-library" class="active">
+    <div class="drop">
+      <div>📖 Solte um quadrinho aqui ou</div>
+      <button class="btn-primary" id="btnOpen">Abrir arquivo CBZ</button>
+      <input type="file" id="fileInput" accept=".cbz,.zip">
+    </div>
+    <div class="section-label">Sua biblioteca</div>
+    <div id="libList"></div>
+  </div>
+
+  <!-- READER -->
+  <div id="screen-reader">
+    <div id="stage">
+      <div id="pageWrap">
+        <img id="pageImg" draggable="false">
+        <div id="overlay"></div>
+      </div>
+      <div id="balloonCard" style="display:none"></div>
+    </div>
+    <div id="draftToolbar">
+      <span id="draftPos"></span>
+      <button id="btnDraftText" style="display:none">✎ Texto</button>
+      <button id="btnDraftOk">✓ Usar este balão</button>
+      <button id="btnDraftCancel">✕ Cancelar</button>
+    </div>
+    <div id="liteEditBar" style="display:none">
+      <textarea id="liteEditText"></textarea>
+      <button id="liteEditClose" title="Salvar e continuar a leitura">✕</button>
+    </div>
+
+    <div class="ctrlbar">
+      <button class="iconbtn" id="btnPrev">‹</button>
+      <div class="pagepos" id="pagePos">1/1</div>
+      <button class="iconbtn" id="btnNext">›</button>
+      <div class="spacer"></div>
+      <button class="iconbtn" id="btnFit" title="Ajustar à tela" style="display:none">⤢</button>
+      <button class="iconbtn" id="btnDetect" title="Detectar balões automaticamente" style="display:none">🪄</button>
+      <button class="iconbtn" id="btnWalk" title="Ajustar tamanhos em sequência" style="display:none">🧭</button>
+      <button class="iconbtn" id="btnMark" title="Marcar balões">✎</button>
+      <button class="iconbtn" id="btnReadZoom" title="Ampliar balão ao ler">🔍</button>
+      <button class="iconbtn" id="btnPlay" title="Reproduzir">▶</button>
+      <button class="iconbtn" id="btnList" title="Balões">☰</button>
+    </div>
+
+    <div id="sheet">
+      <div class="sheet-head">
+        <b id="sheetTitle">Balões desta página</b>
+        <button class="iconbtn" id="btnCloseSheet">✕</button>
+      </div>
+      <div class="sheet-body" id="sheetBody"></div>
+    </div>
+  </div>
+
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ==================== STATE ==================== */
+const state = {
+  screen:'library',
+  comic:null,          // {id,name,pages:[{name,url,el}]}
+  pageIndex:0,
+  marks:{},            // {pageIndex:[{id,x,y,w,h,order,text}]}
+  mode:'read',          // read | mark | play
+  activeBalloon:null,
+  playQueue:[],
+  playTimer:null,
+  playPauseIndex:null,
+  drawing:null,
+  voices:[],
+  viewTransform:{scale:1,tx:0,ty:0},
+  draft:null,
+  walk:null,
+  storageOk:null,
+  readZoomOn:false,
+  paused:false,
+  pausedBalloon:null,
+  lastDetectDiag:null,
+};
+
+const $ = s => document.querySelector(s);
+const toastEl = $('#toast');
+function toast(msg,ms=2000){
+  toastEl.textContent = msg; toastEl.classList.add('show');
+  clearTimeout(toastEl._t);
+  toastEl._t = setTimeout(()=>toastEl.classList.remove('show'), ms);
+}
+function toastProgress(msg){
+  toastEl.textContent = msg; toastEl.classList.add('show');
+  clearTimeout(toastEl._t);
+}
+
+/* ==================== STORAGE HELPERS ==================== */
+// Usa window.storage quando disponível (dentro do Claude); fora daqui, usa localStorage do navegador normalmente.
+async function storeGet(key){
+  if(window.storage){
+    try{ const r = await window.storage.get(key,false); return r ? JSON.parse(r.value) : null; }
+    catch(e){ return null; }
+  }
+  try{ const v = localStorage.getItem('balao:'+key); return v ? JSON.parse(v) : null; }
+  catch(e){ return null; }
+}
+async function storeSet(key,val){
+  if(window.storage){
+    try{ await window.storage.set(key, JSON.stringify(val), false); return true; }
+    catch(e){ console.error('storage set fail',e); return false; }
+  }
+  try{ localStorage.setItem('balao:'+key, JSON.stringify(val)); return true; }
+  catch(e){ console.error('localStorage set fail',e); return false; }
+}
+async function checkStorageAvailable(){
+  try{
+    const ok = await storeSet('balao-teste-storage', {ok:true, t:Date.now()});
+    const back = await storeGet('balao-teste-storage');
+    state.storageOk = !!(ok && back && back.ok===true);
+  }catch(e){
+    state.storageOk = false;
+    console.warn('Salvamento automático indisponível:', e);
+  }
+  updateStorageBadge();
+  if(!state.storageOk){
+    toast('⚠ Salvamento automático indisponível nesta sessão. Depois de marcar, toque em ⬇ pra baixar o CBZ — senão as marcações se perdem ao fechar.', 8000);
+  }
+}
+function updateStorageBadge(){
+  const b = $('#btnDownload');
+  if(!b) return;
+  b.classList.toggle('warn', state.storageOk===false);
+}
+function slugify(name){
+  return name.toLowerCase().replace(/\.[^.]+$/,'').replace(/[^a-z0-9]+/g,'-').replace(/^-+|-+$/g,'') || 'comic';
+}
+
+/* ==================== LIBRARY ==================== */
+async function refreshLibrary(){
+  const list = (await storeGet('comics-list')) || [];
+  const el = $('#libList'); el.innerHTML='';
+  if(!list.length){ el.innerHTML = '<div class="empty-hint">Nenhum quadrinho ainda. Abra um CBZ para começar — as marcações de balão ficam salvas mesmo depois de fechar o app.</div>'; return; }
+  list.slice().reverse().forEach(c=>{
+    const div = document.createElement('div'); div.className='lib-item';
+    div.innerHTML = `<div class="lib-thumb">${c.pages}p</div>
+      <div class="lib-meta"><div class="name">${c.name}</div><div class="stat">${c.balloons||0} balões marcados</div></div>
+      <button class="lib-del" data-id="${c.id}">🗑</button>`;
+    div.addEventListener('click',(e)=>{
+      if(e.target.closest('.lib-del')) return;
+      toast('Selecione o mesmo arquivo CBZ para reabrir — as marcações serão restauradas.');
+      $('#fileInput').dataset.resumeId = c.id;
+      $('#fileInput').click();
+    });
+    div.querySelector('.lib-del').addEventListener('click', async (e)=>{
+      e.stopPropagation();
+      const id = e.currentTarget.dataset.id;
+      const nl = list.filter(x=>x.id!==id);
+      await storeSet('comics-list', nl);
+      await storeSet('marks:'+id, null);
+      refreshLibrary();
+    });
+    el.appendChild(div);
+  });
+}
+
+async function registerComic(id,name,pages){
+  const list = (await storeGet('comics-list')) || [];
+  const existing = list.find(c=>c.id===id);
+  const balloons = Object.values(state.marks).reduce((a,arr)=>a+arr.length,0);
+  if(existing){ existing.name=name; existing.pages=pages; existing.balloons=balloons; }
+  else list.push({id,name,pages,balloons});
+  await storeSet('comics-list', list);
+}
+
+/* ==================== OPEN CBZ ==================== */
+$('#btnOpen').addEventListener('click', ()=>{ delete $('#fileInput').dataset.resumeId; $('#fileInput').click(); });
+$('#fileInput').addEventListener('change', async (e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  await openCbz(file);
+  e.target.value='';
+});
+
+const MARKS_ENTRY = 'balao-marks.xml';
+
+function xmlFromMarks(marks){
+  const doc = document.implementation.createDocument('', '', null);
+  const root = doc.createElement('BalaoData'); root.setAttribute('version','1');
+  Object.keys(marks).forEach(pageIdx=>{
+    const arr = marks[pageIdx]||[];
+    if(!arr.length) return;
+    const pageEl = doc.createElement('Page'); pageEl.setAttribute('index', pageIdx);
+    arr.forEach(b=>{
+      const bEl = doc.createElement('Balloon');
+      bEl.setAttribute('id', b.id); bEl.setAttribute('order', b.order);
+      bEl.setAttribute('x', b.x); bEl.setAttribute('y', b.y);
+      bEl.setAttribute('w', b.w); bEl.setAttribute('h', b.h);
+      const textEl = doc.createElement('Text'); textEl.textContent = b.text||'';
+      bEl.appendChild(textEl);
+      pageEl.appendChild(bEl);
+    });
+    root.appendChild(pageEl);
+  });
+  doc.appendChild(root);
+  return '<?xml version="1.0" encoding="UTF-8"?>\n' + new XMLSerializer().serializeToString(doc);
+}
+function marksFromXml(xmlText){
+  const marks={};
+  try{
+    const doc = new DOMParser().parseFromString(xmlText,'application/xml');
+    if(doc.querySelector('parsererror')) return marks;
+    doc.querySelectorAll('Page').forEach(pageEl=>{
+      const idx = pageEl.getAttribute('index');
+      const arr=[];
+      pageEl.querySelectorAll('Balloon').forEach(bEl=>{
+        arr.push({
+          id: bEl.getAttribute('id') || ('b'+Math.random().toString(36).slice(2)),
+          order: parseInt(bEl.getAttribute('order'),10)||1,
+          x: parseFloat(bEl.getAttribute('x')), y: parseFloat(bEl.getAttribute('y')),
+          w: parseFloat(bEl.getAttribute('w')), h: parseFloat(bEl.getAttribute('h')),
+          text: (function(){ var te = bEl.querySelector('Text'); return te ? te.textContent : ''; })()
+        });
+      });
+      marks[idx]=arr;
+    });
+  }catch(e){ console.error('parse marks xml failed', e); }
+  return marks;
+}
+function updateZipXml(){
+  if(state.comic && state.comic.zip){
+    state.comic.zip.file(MARKS_ENTRY, xmlFromMarks(state.marks));
+  }
+}
+
+async function openCbz(file){
+  toast('Abrindo quadrinho…', 4000);
+  try{
+    const zip = await JSZip.loadAsync(file);
+    const entries = Object.values(zip.files)
+      .filter(f=>!f.dir && /\.(jpe?g|png|webp|gif)$/i.test(f.name))
+      .sort((a,b)=>a.name.localeCompare(b.name, undefined, {numeric:true}));
+    if(!entries.length){ toast('Nenhuma imagem encontrada no arquivo.'); return; }
+    const pages=[];
+    for(let i=0;i<entries.length;i++){
+      const entry = entries[i];
+      toastProgress(`Extraindo página ${i+1}/${entries.length}`);
+      const blob = await entry.async('blob');
+      pages.push({name:entry.name, url:URL.createObjectURL(blob)});
+    }
+    const id = slugify(file.name);
+    state.comic = {id, name:file.name, pages, zip};
+    const embedded = zip.file(MARKS_ENTRY);
+    if(embedded){
+      const xmlText = await embedded.async('string');
+      state.marks = marksFromXml(xmlText);
+      toast('Marcações encontradas dentro do arquivo ✓');
+    } else {
+      state.marks = (await storeGet('marks:'+id)) || {};
+      if(Object.keys(state.marks).length) toast('Marcações restauradas da nuvem do app.');
+    }
+    state.pageIndex = 0;
+    state.readZoomOn = !!(await storeGet('readzoom:'+id));
+    await registerComic(id, file.name, pages.length);
+    goReader();
+  }catch(err){
+    console.error(err);
+    toast('Erro ao abrir: ' + (err && err.message ? err.message : err), 6000);
+  }
+}
+
+async function downloadUpdatedCbz(){
+  if(!state.comic || !state.comic.zip){ toast('Abra um quadrinho primeiro.'); return; }
+  const btn = $('#btnDownload');
+  if(btn.disabled) return;
+  btn.disabled = true;
+  updateZipXml();
+  toastProgress('Gerando arquivo… 0%');
+  try{
+    const blob = await state.comic.zip.generateAsync(
+      {type:'blob', compression:'DEFLATE', compressionOptions:{level:4}},
+      (metadata)=>{ toastProgress(`Gerando arquivo… ${Math.round(metadata.percent)}%`); }
+    );
+    const baseName = state.comic.name.replace(/\.(cbz|zip)$/i,'');
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = baseName + '-balao.cbz';
+    document.body.appendChild(a); a.click(); a.remove();
+    toast('CBZ com marcações baixado ✓');
+  }catch(e){
+    console.error(e); toast('Erro ao gerar: ' + (e && e.message ? e.message : e), 6000);
+  }finally{
+    btn.disabled = false;
+  }
+}
+
+/* ==================== SCREEN NAV ==================== */
+function goReader(){
+  state.screen='reader';
+  $('#screen-library').classList.remove('active');
+  $('#screen-reader').classList.add('active');
+  $('#topSub').textContent = state.comic.name;
+  $('#btnBack').style.display='flex';
+  $('#btnDownload').style.display='flex';
+  renderPage();
+}
+function goLibrary(){
+  stopPlay();
+  clearDraft();
+  hideBalloonCard();
+  closeLiteEdit(false);
+  state.screen='library';
+  $('#screen-reader').classList.remove('active');
+  $('#screen-library').classList.add('active');
+  $('#topSub').textContent='leitor de quadrinho com voz';
+  $('#btnBack').style.display='none';
+  $('#btnDownload').style.display='none';
+  refreshLibrary();
+}
+$('#btnBack').addEventListener('click', goLibrary);
+$('#btnDownload').addEventListener('click', downloadUpdatedCbz);
+
+/* ==================== PAGE RENDER ==================== */
+function currentMarks(){
+  const arr = state.marks[state.pageIndex] || [];
+  return arr.slice().sort((a,b)=>a.order-b.order);
+}
+function fitImageToStage(){
+  const stage = $('#stage').getBoundingClientRect();
+  const img = $('#pageImg');
+  if(!img.naturalWidth || !stage.width || !stage.height) return;
+  const scale = Math.min(stage.width/img.naturalWidth, stage.height/img.naturalHeight);
+  img.style.width = Math.round(img.naturalWidth*scale)+'px';
+  img.style.height = Math.round(img.naturalHeight*scale)+'px';
+}
+function renderPage(){
+  clearDraft();
+  hideBalloonCard();
+  closeLiteEdit(false);
+  const p = state.comic.pages[state.pageIndex];
+  const img = $('#pageImg');
+  img.onload = ()=>{ fitImageToStage(); resetZoom(); drawBalloons(); };
+  img.src = p.url;
+  $('#pagePos').textContent = `${state.pageIndex+1}/${state.comic.pages.length}`;
+  setMode(state.mode==='play' ? state.mode : 'read');
+  $('#btnReadZoom').classList.toggle('on', state.readZoomOn);
+  closeSheet();
+}
+function drawBalloons(){
+  const overlay = $('#overlay');
+  overlay.innerHTML='';
+  const marks = currentMarks();
+  const svgNS='http://www.w3.org/2000/svg';
+  if(marks.length>1 && state.mode!=='play'){
+    const svg = document.createElementNS(svgNS,'svg');
+    svg.setAttribute('width','100%'); svg.setAttribute('height','100%');
+    svg.style.position='absolute'; svg.style.inset='0'; svg.style.pointerEvents='none';
+    let d='';
+    marks.forEach((b,i)=>{
+      const cx=(b.x+b.w/2)*100, cy=(b.y+b.h/2)*100;
+      d += (i===0?'M':'L') + cx + '%,' + cy + '% ';
+    });
+    const path = document.createElementNS(svgNS,'path');
+    path.setAttribute('d',d); path.setAttribute('class','path-line');
+    svg.appendChild(path); overlay.appendChild(svg);
+  }
+  marks.forEach(b=>{
+    if(state.draft && state.draft.editingId===b.id) return;
+    if(state.mode==='play' && state.activeBalloon!==b.id) return; // no play, só mostra o balão ativo
+    const div = document.createElement('div');
+    div.className='balloon'+(state.activeBalloon===b.id?' active':'');
+    div.style.left=(b.x*100)+'%'; div.style.top=(b.y*100)+'%';
+    div.style.width=(b.w*100)+'%'; div.style.height=(b.h*100)+'%';
+    div.innerHTML = `<div class="tag">${b.order}</div>`;
+    div.addEventListener('click',(ev)=>{ ev.stopPropagation(); onBalloonTap(b); });
+    overlay.appendChild(div);
+  });
+  if(state.draft) renderDraft();
+}
+
+/* ==================== ZOOM ==================== */
+function applyViewTransform(animated){
+  const wrap = $('#pageWrap');
+  wrap.style.transition = animated ? '' : 'none';
+  wrap.style.transformOrigin='0 0';
+  const {scale,tx,ty} = state.viewTransform;
+  wrap.style.transform = `translate(${tx}px,${ty}px) scale(${scale})`;
+}
+function resetZoom(){
+  const stage = $('#stage').getBoundingClientRect();
+  const img = $('#pageImg');
+  const w = img.offsetWidth||0, h = img.offsetHeight||0;
+  const tx = Math.max(0, (stage.width-w)/2);
+  const ty = Math.max(0, (stage.height-h)/2);
+  state.viewTransform = {scale:1, tx, ty};
+  applyViewTransform(true);
+  state.activeBalloon=null;
+}
+function zoomToBalloon(b, opts){
+  opts = opts || {};
+  const stage = $('#stage').getBoundingClientRect();
+  const img = $('#pageImg');
+  const dispW = img.offsetWidth, dispH = img.offsetHeight;
+  const px=(b.x+b.w/2)*dispW, py=(b.y+b.h/2)*dispH;
+  const reserve = opts.reserveBottom || 0;
+  const visibleH = stage.height*(1-reserve);
+  const scale = Math.min(4, Math.max(1.3, Math.min((stage.width*0.86)/(b.w*dispW), (visibleH*0.8)/(b.h*dispH))));
+  const tx = stage.width/2 - px*scale;
+  const ty = visibleH/2 - py*scale;
+  state.viewTransform = {scale,tx,ty};
+  applyViewTransform(true);
+  state.activeBalloon=b.id;
+  drawBalloons();
+}
+function highlightBalloon(b){
+  state.activeBalloon = b.id;
+  drawBalloons();
+}
+
+/* ==================== CARD AMPLIADO (zoom ao ler) ==================== */
+function showBalloonCard(b){
+  if(!state.readZoomOn || !state.comic) return;
+  const img = $('#pageImg');
+  const stage = $('#stage').getBoundingClientRect();
+  const rect = img.getBoundingClientRect();
+
+  // recorte em boa resolução a partir da imagem original (nao da tela pequena)
+  const nw = img.naturalWidth, nh = img.naturalHeight;
+  const bx = b.x*nw, by = b.y*nh, bw = b.w*nw, bh = b.h*nh;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1,Math.round(bw));
+  canvas.height = Math.max(1,Math.round(bh));
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, bx, by, bw, bh, 0, 0, canvas.width, canvas.height);
+
+  // posicao/tamanho na tela: centralizado sobre o proprio balao, ampliado
+  const screenX = rect.left - stage.left + b.x*rect.width;
+  const screenY = rect.top - stage.top + b.y*rect.height;
+  const screenW = b.w*rect.width;
+  const screenH = b.h*rect.height;
+  // valores anteriores (caso precise voltar): scale 1.6–2.3, alvo 190, largura 0.72, altura 0.46
+  const scale = Math.min(1.7, Math.max(1.0, 143/Math.max(1,screenH)));
+  let cardW = screenW*scale, cardH = screenH*scale;
+  cardW = Math.min(cardW, stage.width*0.54);
+  cardH = Math.min(cardH, stage.height*0.35);
+  let cx = screenX + screenW/2, cy = screenY + screenH/2;
+  let left = cx - cardW/2, top = cy - cardH/2;
+  // mantem dentro da area visivel do stage
+  left = Math.max(6, Math.min(left, stage.width - cardW - 6));
+  top = Math.max(6, Math.min(top, stage.height - cardH - 6));
+
+  const card = $('#balloonCard');
+  card.style.left = left+'px';
+  card.style.top = top+'px';
+  card.style.width = cardW+'px';
+  card.style.height = cardH+'px';
+  card.innerHTML = '';
+  const outImg = document.createElement('img');
+  outImg.src = canvas.toDataURL('image/png');
+  card.appendChild(outImg);
+  card.style.display = 'block';
+  card.onclick = ()=> pauseAndEditWhileReading(b);
+  state.cardBalloonId = b.id;
+}
+function hideBalloonCard(){
+  const card = $('#balloonCard');
+  if(card){ card.style.display='none'; card.onclick=null; }
+  state.cardBalloonId = null;
+}
+
+/* ==================== EDIÇÃO RÁPIDA DURANTE A LEITURA ==================== */
+function pauseAndEditWhileReading(b){
+  if(state.ttsAvailable) speechSynthesis.cancel();
+  clearTimeout(state.playTimer);
+  state.paused = true;
+  state.pausedBalloon = b;
+  $('#liteEditText').value = b.text || '';
+  $('#liteEditBar').style.display = 'flex';
+  $('#liteEditText').focus();
+}
+async function closeLiteEdit(resume){
+  const bar = $('#liteEditBar');
+  if(bar) bar.style.display = 'none';
+  if(!state.paused) return;
+  const b = state.pausedBalloon;
+  state.paused = false;
+  state.pausedBalloon = null;
+  if(!b) return;
+  if(resume===false) return; // fechado por troca de pagina/tela, nao retoma leitura
+  b.text = $('#liteEditText').value;
+  await saveMarks();
+  drawBalloons();
+  if(state.mode==='play'){
+    const marks = currentMarks();
+    const idx = marks.findIndex(x=>x.id===b.id);
+    setMode('play');
+    if(idx>=0) playNext(idx);
+  } else {
+    highlightBalloon(b);
+    if(state.readZoomOn) showBalloonCard(b);
+    speak(b.text);
+  }
+}
+$('#liteEditClose').addEventListener('click', ()=> closeLiteEdit(true));
+
+function clearHighlight(){
+  state.activeBalloon = null;
+  hideBalloonCard();
+  drawBalloons();
+}
+
+/* ==================== MODE ==================== */
+async function placeBalloonInstant(x,y,w,h){
+  const arr = state.marks[state.pageIndex] || (state.marks[state.pageIndex]=[]);
+  const order = arr.length ? Math.max(...arr.map(b=>b.order))+1 : 1;
+  const balloon = {id:'b'+Date.now()+Math.random().toString(36).slice(2,5), x,y,w,h, order, text:''};
+  arr.push(balloon);
+  await saveMarks();
+  drawBalloons();
+}
+function setMode(m){
+  state.mode=m;
+  $('#topSub').textContent = state.comic ? (m==='mark'?'marcando balões':m==='play'?'reproduzindo…':state.comic.name) : '';
+  $('#btnMark').classList.toggle('on', m==='mark');
+  $('#btnPlay').classList.toggle('on', m==='play');
+  $('#btnPlay').textContent = m==='play' ? '⏸' : '▶';
+  $('#btnPlay').title = m==='play' ? 'Pausar' : (state.playPauseIndex!=null ? 'Retomar' : 'Reproduzir');
+  $('#btnFit').style.display = 'flex';
+  $('#btnDetect').style.display = m==='mark' ? 'flex' : 'none';
+  $('#btnWalk').style.display = m==='mark' ? 'flex' : 'none';
+  $('#btnReadZoom').style.display = m==='mark' ? 'none' : 'flex';
+  if(m==='mark') hideBalloonCard();
+}
+$('#btnReadZoom').addEventListener('click', async ()=>{
+  state.readZoomOn = !state.readZoomOn;
+  $('#btnReadZoom').classList.toggle('on', state.readZoomOn);
+  if(state.comic) await storeSet('readzoom:'+state.comic.id, state.readZoomOn);
+  toast(state.readZoomOn ? 'Zoom ao ler: ligado' : 'Zoom ao ler: desligado', 1800);
+  if(!state.readZoomOn) hideBalloonCard();
+});
+$('#btnMark').addEventListener('click', ()=>{
+  stopPlay();
+  clearDraft();
+  const entering = state.mode!=='mark';
+  setMode(entering?'mark':'read');
+  resetZoom(); drawBalloons();
+  if(entering && !state._markHintShown){ state._markHintShown=true; toast('1) Toque na página pra marcar todos os balões rapidinho. 2) Toque em 🧭 pra ajustar o tamanho de cada um, em sequência e com zoom.', 6000); }
+});
+$('#btnFit').addEventListener('click', ()=>{ resetZoom(); drawBalloons(); });
+
+/* ==================== PREV/NEXT ==================== */
+$('#btnPrev').addEventListener('click', ()=>{ stopPlay(); if(state.pageIndex>0){ state.pageIndex--; renderPage(); }});
+$('#btnNext').addEventListener('click', ()=>{ stopPlay(); if(state.pageIndex<state.comic.pages.length-1){ state.pageIndex++; renderPage(); }});
+
+/* ==================== DRAWING NEW BALLOON + PINCH ZOOM/PAN ==================== */
+const overlayEl = $('#overlay');
+const pointers = new Map();
+let pinchStart = null;
+const dist = (a,b)=>Math.hypot(a.x-b.x, a.y-b.y);
+const mid = (a,b)=>({x:(a.x+b.x)/2, y:(a.y+b.y)/2});
+
+function normFromEvent(e){
+  const rect = $('#pageImg').getBoundingClientRect();
+  return { x: Math.min(1,Math.max(0,(e.clientX-rect.left)/rect.width)),
+           y: Math.min(1,Math.max(0,(e.clientY-rect.top)/rect.height)) };
+}
+
+overlayEl.addEventListener('pointerdown', (e)=>{
+  overlayEl.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, {x:e.clientX, y:e.clientY});
+
+  if(pointers.size===2){
+    const pts=[...pointers.values()];
+    pinchStart = { dist:dist(pts[0],pts[1]), mid:mid(pts[0],pts[1]),
+      scale:state.viewTransform.scale, tx:state.viewTransform.tx, ty:state.viewTransform.ty };
+    return;
+  }
+  if(pointers.size!==1) return;
+  if(state.mode!=='mark'){ if(state.activeBalloon){ clearHighlight(); } return; }
+  if(e.target.closest('.balloon') || e.target.closest('.draft-box')) return;
+  if(state.draft || state.walk) return;
+  const p = normFromEvent(e);
+  const w=0.18, h=0.09;
+  const x = Math.min(Math.max(0,p.x-w/2),1-w), y = Math.min(Math.max(0,p.y-h/2),1-h);
+  placeBalloonInstant(x,y,w,h);
+});
+overlayEl.addEventListener('pointermove', (e)=>{
+  if(pointers.has(e.pointerId)) pointers.set(e.pointerId, {x:e.clientX,y:e.clientY});
+  if(pointers.size===2 && pinchStart){
+    const pts=[...pointers.values()];
+    const d = dist(pts[0],pts[1]);
+    const m = mid(pts[0],pts[1]);
+    const stage = $('#stage').getBoundingClientRect();
+    const newScale = Math.min(6, Math.max(0.8, pinchStart.scale * (d/pinchStart.dist)));
+    const anchorX = (pinchStart.mid.x - stage.left - pinchStart.tx) / pinchStart.scale;
+    const anchorY = (pinchStart.mid.y - stage.top - pinchStart.ty) / pinchStart.scale;
+    state.viewTransform = {
+      scale: newScale,
+      tx: (m.x - stage.left) - anchorX*newScale,
+      ty: (m.y - stage.top) - anchorY*newScale
+    };
+    applyViewTransform(false);
+  }
+});
+overlayEl.addEventListener('pointerup', (e)=>{ pointers.delete(e.pointerId); if(pointers.size<2) pinchStart=null; });
+overlayEl.addEventListener('pointercancel', (e)=>{ pointers.delete(e.pointerId); pinchStart=null; });
+
+/* ---- draft box: create, resize via handles, move ---- */
+function renderDraft(){
+  let box = document.getElementById('draftBox');
+  if(!box){
+    box = document.createElement('div');
+    box.id='draftBox'; box.className='draft-box';
+    ['nw','ne','sw','se'].forEach(corner=>{
+      const h=document.createElement('div');
+      h.className='draft-handle '+corner;
+      attachHandleDrag(h,corner);
+      box.appendChild(h);
+    });
+    attachBoxMove(box);
+    overlayEl.appendChild(box);
+  }
+  positionDraftBox();
+  showDraftToolbar(true);
+  if(state.walk){
+    updateWalkToolbar();
+  } else {
+    $('#btnDraftOk').textContent = state.draft.editingId ? '✓ Salvar posição' : '✓ Usar este balão';
+    $('#btnDraftText').style.display = state.draft.editingId ? 'inline-block' : 'none';
+    $('#btnDraftCancel').textContent = '✕ Cancelar';
+    $('#draftPos').textContent = '';
+  }
+}
+function positionDraftBox(){
+  const box = document.getElementById('draftBox'); if(!box || !state.draft) return;
+  const d = state.draft;
+  box.style.left=(d.x*100)+'%'; box.style.top=(d.y*100)+'%';
+  box.style.width=(d.w*100)+'%'; box.style.height=(d.h*100)+'%';
+}
+function attachHandleDrag(handle, corner){
+  handle.addEventListener('pointerdown', (e)=>{
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    const editingId = state.draft.editingId;
+    const fixed = {
+      x: corner.includes('w') ? state.draft.x+state.draft.w : state.draft.x,
+      y: corner.includes('n') ? state.draft.y+state.draft.h : state.draft.y
+    };
+    const onMove = (ev)=>{
+      const p = normFromEvent(ev);
+      const nx=Math.min(p.x,fixed.x), fx=Math.max(p.x,fixed.x);
+      const ny=Math.min(p.y,fixed.y), fy=Math.max(p.y,fixed.y);
+      state.draft = { x:nx, y:ny, w:Math.max(0.02,fx-nx), h:Math.max(0.02,fy-ny), editingId };
+      positionDraftBox();
+    };
+    const onUp = ()=>{
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+    };
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  });
+}
+function attachBoxMove(box){
+  box.addEventListener('pointerdown', (e)=>{
+    if(e.target!==box) return;
+    e.stopPropagation();
+    box.setPointerCapture(e.pointerId);
+    const start = normFromEvent(e);
+    const orig = Object.assign({}, state.draft);
+    const onMove = (ev)=>{
+      const p = normFromEvent(ev);
+      const dx=p.x-start.x, dy=p.y-start.y;
+      state.draft = {
+        x: Math.min(Math.max(0, orig.x+dx), 1-orig.w),
+        y: Math.min(Math.max(0, orig.y+dy), 1-orig.h),
+        w: orig.w, h: orig.h, editingId: orig.editingId
+      };
+      positionDraftBox();
+    };
+    const onUp = ()=>{
+      box.removeEventListener('pointermove', onMove);
+      box.removeEventListener('pointerup', onUp);
+      box.removeEventListener('pointercancel', onUp);
+    };
+    box.addEventListener('pointermove', onMove);
+    box.addEventListener('pointerup', onUp);
+    box.addEventListener('pointercancel', onUp);
+  });
+}
+function showDraftToolbar(show){ $('#draftToolbar').style.display = show?'flex':'none'; }
+function clearDraft(){
+  state.draft=null;
+  state.walk=null;
+  const box=document.getElementById('draftBox'); if(box) box.remove();
+  showDraftToolbar(false);
+}
+async function commitDraft(){
+  if(!state.draft) return;
+  const d = state.draft;
+  if(d.editingId){
+    const arr = state.marks[state.pageIndex] || [];
+    const existing = arr.find(b=>b.id===d.editingId);
+    if(existing){ existing.x=d.x; existing.y=d.y; existing.w=d.w; existing.h=d.h; }
+    clearDraft();
+    await saveMarks();
+    drawBalloons();
+    toast('Posição do balão atualizada ✓');
+    return;
+  }
+  const arr = state.marks[state.pageIndex] || (state.marks[state.pageIndex]=[]);
+  const order = arr.length ? Math.max(...arr.map(b=>b.order))+1 : 1;
+  const balloon = {id:'b'+Date.now(), x:d.x,y:d.y,w:d.w,h:d.h, order, text:''};
+  arr.push(balloon);
+  clearDraft();
+  await saveMarks();
+  drawBalloons();
+  openBalloonEditor(balloon, true);
+}
+
+/* ---- ajuste em sequência (walkthrough) ---- */
+function startWalkAdjust(){
+  const marks = currentMarks();
+  if(!marks.length){ toast('Nenhum balão marcado nesta página ainda. Toque na página pra criar alguns primeiro.'); return; }
+  state.walk = {index:0};
+  enterWalkBalloon(0);
+}
+function enterWalkBalloon(i){
+  const marks = currentMarks();
+  if(i >= marks.length){ finishWalk(); return; }
+  if(i < 0) i = 0;
+  state.walk.index = i;
+  const b = marks[i];
+  state.draft = {x:b.x, y:b.y, w:b.w, h:b.h, editingId:b.id};
+  zoomToBalloon(b, {reserveBottom:0});
+  drawBalloons();
+}
+function updateWalkToolbar(){
+  const marks = currentMarks();
+  const i = state.walk.index;
+  $('#draftPos').textContent = `${i+1}/${marks.length}`;
+  $('#btnDraftText').style.display = 'none';
+  $('#btnDraftOk').textContent = (i >= marks.length-1) ? '✓ Concluir' : 'Próximo ›';
+  $('#btnDraftCancel').textContent = i>0 ? '‹ Anterior' : '✕ Sair';
+}
+function commitWalkCurrent(){
+  if(!state.draft || !state.draft.editingId) return;
+  const d = state.draft;
+  const arr = state.marks[state.pageIndex] || [];
+  const existing = arr.find(x=>x.id===d.editingId);
+  if(existing){ existing.x=d.x; existing.y=d.y; existing.w=d.w; existing.h=d.h; }
+}
+async function walkNext(){
+  commitWalkCurrent();
+  await saveMarks();
+  enterWalkBalloon(state.walk.index+1);
+}
+async function walkBack(){
+  commitWalkCurrent();
+  await saveMarks();
+  if(state.walk.index>0) enterWalkBalloon(state.walk.index-1);
+  else await finishWalk();
+}
+async function finishWalk(){
+  commitWalkCurrent();
+  await saveMarks();
+  state.walk = null;
+  clearDraft();
+  resetZoom();
+  drawBalloons();
+  toast('Ajuste em sequência concluído ✓');
+}
+$('#btnWalk').addEventListener('click', startWalkAdjust);
+
+$('#btnDraftOk').addEventListener('click', ()=>{ if(state.walk){ walkNext(); } else { commitDraft(); } });
+$('#btnDraftCancel').addEventListener('click', ()=>{ if(state.walk){ walkBack(); } else { clearDraft(); } });
+$('#btnDraftText').addEventListener('click', async ()=>{
+  if(!state.draft || !state.draft.editingId) return;
+  const d = state.draft;
+  const arr = state.marks[state.pageIndex] || [];
+  const existing = arr.find(b=>b.id===d.editingId);
+  if(existing){ existing.x=d.x; existing.y=d.y; existing.w=d.w; existing.h=d.h; }
+  clearDraft();
+  await saveMarks();
+  drawBalloons();
+  if(existing) openBalloonEditor(existing, false);
+});
+
+/* ==================== DETECÇÃO AUTOMÁTICA DE BALÕES ==================== */
+async function saveMarks(){
+  if(!state.comic) return;
+  updateZipXml();
+  await storeSet('marks:'+state.comic.id, state.marks);
+  const list = (await storeGet('comics-list'))||[];
+  const c = list.find(x=>x.id===state.comic.id);
+  if(c){ c.balloons = Object.values(state.marks).reduce((a,arr)=>a+arr.length,0); await storeSet('comics-list', list); }
+}
+async function detectBalloons(){
+  if(!state.comic) return;
+  const btn = $('#btnDetect');
+  btn.disabled = true; const oldTxt = btn.textContent; btn.textContent='⏳';
+  try{
+    const img = $('#pageImg');
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    const maxDim = 1300;
+    const scale = Math.min(1, maxDim/Math.max(nw,nh));
+    const w = Math.max(1,Math.round(nw*scale)), h = Math.max(1,Math.round(nh*scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w; canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0,0,w,h);
+
+    toastProgress('Carregando OCR…');
+    const worker = await getTessWorker();
+    toastProgress('Lendo o texto da página inteira (pode levar um tempinho)…');
+    const dictPromise = getPtDict();
+    const result = await worker.recognize(canvas, {}, {words:true, blocks:true, text:true});
+    const data = result.data;
+    const ptDict = await dictPromise;
+
+    // extrai palavras com posição, cobrindo formatos diferentes que o tesseract.js pode devolver
+    let words = data.words || [];
+    if(!words.length && data.blocks){
+      data.blocks.forEach(block=>{
+        (block.paragraphs||[]).forEach(par=>{
+          (par.lines||[]).forEach(line=>{
+            (line.words||[]).forEach(wd=> words.push(wd));
+          });
+        });
+      });
+    }
+
+    // grupamento principal: usa a segmentação em blocos que o próprio Tesseract
+    // já calcula (mesmo método validado no script Python) — bem mais confiável
+    // do que tentar juntar palavra por palavra na unha.
+    const PAGE_AREA = w*h;
+    const MAX_BOX_FRAC = 0.16;               // caixa maior que isso é provável erro de segmentação — descarta
+    const MIN_CONF = 55;                     // confiança mínima do OCR pra considerar a palavra
+    const MIN_CHARS = 2;                     // caracteres confiáveis mínimos no bloco todo — corta ruído
+    const MIN_DIM_FRAC = 0.012;              // largura/altura mínima da caixa (fração da página)
+
+    function bboxFromWords(wordList){
+      let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity, any=false, charCount=0;
+      wordList.forEach(wd=>{
+        const t=(wd.text||'').trim();
+        if(!t) return;
+        if(wd.confidence!=null && wd.confidence<MIN_CONF) return;
+        const bb=wd.bbox; if(!bb) return;
+        any=true;
+        charCount += t.replace(/[^A-Za-zÀ-ÿ0-9]/g,'').length;
+        if(bb.x0<x0)x0=bb.x0; if(bb.y0<y0)y0=bb.y0; if(bb.x1>x1)x1=bb.x1; if(bb.y1>y1)y1=bb.y1;
+      });
+      if(!any || charCount < MIN_CHARS) return null;
+      return {x0,y0,x1,y1};
+    }
+
+    const diag = {palavrasOcr:0, semConfianca:0, totalGrupos:0, semPalavraReal:0, caixaGrande:0, caixaPequena:0, aceitos:0};
+    diag.palavrasOcr = words.length;
+
+    const boxes = [];
+    words.forEach(wd=>{
+      const t = (wd.text||'').trim();
+      if(!t){ return; }
+      if(wd.confidence!=null && wd.confidence<MIN_CONF){ diag.semConfianca++; return; }
+      const bbox = wd.bbox; if(!bbox) return;
+      boxes.push({x0:bbox.x0, y0:bbox.y0, x1:bbox.x1, y1:bbox.y1, text:t});
+    });
+
+    // agrupa palavras próximas num só balão (proximidade vertical/horizontal)
+    const n = boxes.length;
+    const parent = [];
+    for(let i=0;i<n;i++) parent.push(i);
+    function find(a){ while(parent[a]!==a) a=parent[a]; return a; }
+    function union(a,b){ const ra=find(a), rb=find(b); if(ra!==rb) parent[ra]=rb; }
+    for(let i=0;i<n;i++){
+      for(let j=i+1;j<n;j++){
+        const a=boxes[i], b=boxes[j];
+        const avgh = ((a.y1-a.y0)+(b.y1-b.y0))/2;
+        const vgap = Math.max(0, Math.max(a.y0,b.y0) - Math.min(a.y1,b.y1));
+        const hoverlap = Math.min(a.x1,b.x1) - Math.max(a.x0,b.x0);
+        const hgap = Math.max(0, Math.max(a.x0,b.x0) - Math.min(a.x1,b.x1));
+        if(vgap < avgh*0.5 && hoverlap > -avgh*0.5 && hgap < avgh*0.8) union(i,j);
+      }
+    }
+    const groups = {};
+    for(let i=0;i<n;i++){ const r=find(i); if(!groups[r])groups[r]=[]; groups[r].push(boxes[i]); }
+    diag.totalGrupos = Object.keys(groups).length;
+
+    let cands = [];
+    Object.keys(groups).forEach(k=>{
+      const items = groups[k];
+      if(!blockLooksLikeRealText(items.map(it=>({text:it.text})), ptDict)){ diag.semPalavraReal++; return; }
+      let x0=Infinity,y0=Infinity,x1=-Infinity,y1=-Infinity;
+      items.forEach(b=>{ if(b.x0<x0)x0=b.x0; if(b.y0<y0)y0=b.y0; if(b.x1>x1)x1=b.x1; if(b.y1>y1)y1=b.y1; });
+      const bw_=x1-x0, bh_=y1-y0;
+      if(bw_*bh_ > PAGE_AREA*MAX_BOX_FRAC){ diag.caixaGrande++; return; }
+      if(bw_ < w*MIN_DIM_FRAC || bh_ < h*MIN_DIM_FRAC){ diag.caixaPequena++; return; }
+      diag.aceitos++;
+      const padx=bw_*0.025, pady=bh_*0.05;
+      x0=Math.max(0,x0-padx); y0=Math.max(0,y0-pady); x1=Math.min(w,x1+padx); y1=Math.min(h,y1+pady);
+      cands.push({x:x0/w, y:y0/h, w:(x1-x0)/w, h:(y1-y0)/h, yc:(y0+y1)/2/h, xc:(x0+x1)/2/w});
+    });
+    console.log('Diagnóstico detecção de balões:', diag, 'dicionário carregado:', !!ptDict);
+
+    if(!cands.length){
+      const motivo = ptDict ? '' : ' (o dicionário de verificação não carregou — se abriu o arquivo direto do computador, sem estar hospedado, isso pode ter travado)';
+      toast('Não encontrei texto nesta página.' + motivo + ' Marque manualmente.', 6500);
+      return;
+    }
+
+    // ordem de leitura: agrupa em linhas por altura, ordena por x dentro da linha
+    cands.sort((a,b)=>a.yc-b.yc);
+    const rows = [];
+    const rowTol = 0.035;
+    cands.forEach(c=>{
+      let placed=false;
+      for(let i=0;i<rows.length;i++){
+        const row = rows[i];
+        if(Math.abs(row.y-c.yc) < rowTol){
+          row.items.push(c); row.y=(row.y*row.items.length+c.yc)/(row.items.length+1); placed=true; break;
+        }
+      }
+      if(!placed) rows.push({y:c.yc, items:[c]});
+    });
+    rows.sort((a,b)=>a.y-b.y);
+    const ordered = [];
+    rows.forEach(row=>{ row.items.sort((a,b)=>a.xc-b.xc); row.items.forEach(it=>ordered.push(it)); });
+
+    const arr = state.marks[state.pageIndex] || (state.marks[state.pageIndex]=[]);
+    let order = arr.length ? Math.max.apply(null, arr.map(x=>x.order)) : 0;
+    ordered.forEach(c=>{
+      order++;
+      arr.push({id:'b'+Date.now()+Math.random().toString(36).slice(2,6), x:c.x, y:c.y, w:c.w, h:c.h, order, text:''});
+    });
+    await saveMarks();
+    drawBalloons();
+    console.log('Diagnóstico final:', diag);
+    state.lastDetectDiag = diag;
+    toast(`${ordered.length} bloco(s) detectado(s) — veja o diagnóstico completo na lista (☰).`, 5000);
+    openSheetList();
+  }catch(e){
+    console.error('detect error', e);
+    toast('Erro ao detectar: '+e.message, 5000);
+  }finally{
+    btn.disabled=false; btn.textContent=oldTxt;
+  }
+}
+$('#btnDetect').addEventListener('click', detectBalloons);
+
+/* ==================== BALLOON TAP / SHEET ==================== */
+function onBalloonTap(b){
+  if(state.mode==='mark'){ startAdjustBalloon(b); return; }
+  highlightBalloon(b);
+  if(state.readZoomOn) showBalloonCard(b);
+  speak(b.text || '(sem texto — use OCR ou digite manualmente)');
+}
+function startAdjustBalloon(b){
+  if(state.draft) return;
+  state.draft = { x:b.x, y:b.y, w:b.w, h:b.h, editingId:b.id };
+  drawBalloons();
+}
+$('#btnList').addEventListener('click', ()=>openSheetList());
+$('#btnCloseSheet').addEventListener('click', closeSheet);
+function closeSheet(){ $('#sheet').classList.remove('open'); }
+function openSheetList(){
+  $('#sheetTitle').textContent='Balões desta página';
+  const body = $('#sheetBody'); body.innerHTML='';
+  if(state.lastDetectDiag){
+    const d = state.lastDetectDiag;
+    const diagBox = document.createElement('div');
+    diagBox.className = 'empty-hint';
+    diagBox.style.cssText = 'border:1px solid var(--gold);color:var(--gold);margin-bottom:10px;text-align:left;';
+    diagBox.innerHTML = `<b>Diagnóstico da última detecção:</b><br>
+      ${d.palavrasOcr} palavras lidas pelo OCR<br>
+      ${d.semConfianca} descartadas (baixa confiança)<br>
+      ${d.totalGrupos} grupos formados por proximidade<br>
+      ${d.semPalavraReal} descartados (sem palavra real em português)<br>
+      ${d.caixaGrande} descartados (caixa grande demais)<br>
+      ${d.caixaPequena} descartados (caixa pequena demais)<br>
+      ${d.aceitos} aceitos como balão`;
+    body.appendChild(diagBox);
+  }
+  const marks = currentMarks();
+  if(!marks.length){ body.innerHTML+='<div class="empty-hint">Nenhum balão marcado nesta página. Toque em ✎ para entrar no modo de marcação, depois toque na página pra criar um balão e ajuste arrastando os cantos.</div>'; }
+  else{
+    const bulkRow = document.createElement('div'); bulkRow.className='row'; bulkRow.style.marginBottom='10px';
+    bulkRow.innerHTML = `<button class="ocr" id="btnBulkOcr">🔎 OCR em todos sem texto</button>
+      <button id="btnClearPage">🗑 Limpar todos desta página</button>`;
+    bulkRow.querySelector('#btnBulkOcr').onclick = ()=>bulkOcr(marks);
+    bulkRow.querySelector('#btnClearPage').onclick = ()=>clearPageBalloons();
+    body.appendChild(bulkRow);
+  }
+  marks.forEach(b=>{
+    const row=document.createElement('div'); row.className='balloon-item';
+    row.innerHTML = `<input class="num-input" type="number" min="1" max="${marks.length}" value="${b.order}">
+      <div class="txt">${b.text? b.text : '(sem texto)'}</div>
+      <button data-a="edit">✎</button><button data-a="del">🗑</button>`;
+    const numInput = row.querySelector('.num-input');
+    numInput.addEventListener('click', e=>e.stopPropagation());
+    numInput.addEventListener('change', ()=> setOrder(b, numInput.value));
+    row.querySelector('[data-a=edit]').onclick=()=>openBalloonEditor(b,false);
+    row.querySelector('[data-a=del]').onclick=()=>deleteBalloon(b);
+    row.querySelector('.txt').onclick=()=>{ highlightBalloon(b); speak(b.text); };
+    body.appendChild(row);
+  });
+  $('#sheet').classList.add('open');
+}
+async function clearPageBalloons(){
+  const marks = currentMarks();
+  if(!marks.length) return;
+  if(!confirm(`Apagar todos os ${marks.length} balões marcados nesta página? Essa ação não pode ser desfeita.`)) return;
+  state.marks[state.pageIndex] = [];
+  state.lastDetectDiag = null;
+  await saveMarks();
+  drawBalloons();
+  openSheetList();
+}
+async function bulkOcr(marks){
+  const pending = marks.filter(b=>!b.text);
+  if(!pending.length){ toast('Todos os balões desta página já têm texto.'); return; }
+  const btn = $('#btnBulkOcr');
+  for(let i=0;i<pending.length;i++){
+    if(btn) btn.textContent = `Transcrevendo ${i+1}/${pending.length}…`;
+    const text = await ocrBalloon(pending[i]);
+    if(text){ pending[i].text = text; await saveMarks(); }
+  }
+  toast('OCR em lote concluído — revise os textos abaixo.', 4500);
+  openSheetList();
+}
+async function setOrder(b, newOrderRaw){
+  const marks = currentMarks();
+  let newOrder = parseInt(newOrderRaw,10);
+  if(isNaN(newOrder)){ openSheetList(); return; }
+  newOrder = Math.max(1, Math.min(marks.length, newOrder));
+  const others = marks.filter(x=>x.id!==b.id);
+  others.splice(newOrder-1, 0, b);
+  others.forEach((x,i)=>{ x.order = i+1; });
+  await saveMarks(); drawBalloons(); openSheetList();
+}
+async function deleteBalloon(b){
+  state.marks[state.pageIndex] = (state.marks[state.pageIndex]||[]).filter(x=>x.id!==b.id);
+  await saveMarks(); resetZoom(); drawBalloons(); openSheetList();
+}
+
+/* ==================== BALLOON EDITOR ==================== */
+function openBalloonEditor(b, isNew){
+  const marks = currentMarks();
+  const idx = marks.findIndex(x=>x.id===b.id);
+  $('#sheetTitle').textContent = `Balão ${b.order} de ${marks.length}`;
+  const body = $('#sheetBody');
+  body.innerHTML = `
+    <textarea class="edit-text" id="editText" placeholder="Texto do balão...">${b.text||''}</textarea>
+    <div class="row">
+      <button class="ocr" id="btnOcr">🔎 OCR local</button>
+      <button id="btnAdjust">⤢ Ajustar posição</button>
+    </div>
+    <div class="row">
+      <button class="primary" id="btnSpeak">🔊 Ouvir</button>
+      <button id="btnSaveText">Salvar texto</button>
+    </div>
+    <div class="row">
+      <button id="btnPrevB" ${idx<=0?'disabled':''}>‹ Anterior</button>
+      <button id="btnNextB" ${idx<0||idx>=marks.length-1?'disabled':''}>Próximo ›</button>
+    </div>
+    <div class="row">
+      <button id="btnDelBalloon">Excluir balão</button>
+    </div>
+  `;
+  $('#sheet').classList.add('open');
+  zoomToBalloon(b, {reserveBottom:0.55});
+  $('#btnOcr').onclick = async ()=>{
+    $('#btnOcr').textContent='Transcrevendo…';
+    $('#btnOcr').disabled = true;
+    const text = await ocrBalloon(b);
+    if(text){ $('#editText').value = text; b.text = text; await saveMarks(); }
+    $('#btnOcr').textContent='🔎 OCR local';
+    $('#btnOcr').disabled = false;
+  };
+  $('#btnAdjust').onclick = async ()=>{
+    b.text = $('#editText').value; await saveMarks();
+    closeSheet();
+    startAdjustBalloon(b);
+  };
+  $('#btnSpeak').onclick = ()=> speak($('#editText').value);
+  $('#btnSaveText').onclick = async ()=>{ b.text=$('#editText').value; await saveMarks(); drawBalloons(); toast('Texto salvo ✓', 1500); };
+  $('#btnPrevB').onclick = async ()=>{ b.text=$('#editText').value; await saveMarks(); if(marks[idx-1]) openBalloonEditor(marks[idx-1], false); };
+  $('#btnNextB').onclick = async ()=>{ b.text=$('#editText').value; await saveMarks(); if(marks[idx+1]) openBalloonEditor(marks[idx+1], false); };
+  $('#btnDelBalloon').onclick = ()=> deleteBalloon(b);
+}
+
+/* ==================== OCR LOCAL (TESSERACT.JS) ==================== */
+let tessWorkerPromise = null;
+let ptDictPromise = null;
+function getPtDict(){
+  if(!ptDictPromise){
+    ptDictPromise = fetch('https://raw.githubusercontent.com/hermitdave/FrequencyWords/master/content/2018/pt_br/pt_br_50k.txt')
+      .then(r=>r.text())
+      .then(txt=>{
+        const set = new Set();
+        txt.split('\n').forEach(line=>{
+          const w = line.split(' ')[0];
+          if(w) set.add(w.trim().toLowerCase());
+        });
+        return set;
+      })
+      .catch(err=>{ console.error('falha ao baixar dicionário PT', err); ptDictPromise=null; return null; });
+  }
+  return ptDictPromise;
+}
+function blockLooksLikeRealText(wordList, dict){
+  if(!dict) return true; // sem dicionário disponível, não bloqueia por essa checagem
+  for(let i=0;i<wordList.length;i++){
+    const raw = (wordList[i].text||'').toLowerCase().replace(/[^a-zà-ÿ]/g,'');
+    if(raw.length>=3 && dict.has(raw)) return true;
+  }
+  return false;
+}
+function getTessWorker(){
+  if(!tessWorkerPromise){
+    tessWorkerPromise = Tesseract.createWorker('por', 1, {
+      logger: m => { if(m.status){ toastProgress(`OCR local: ${m.status}${m.progress!=null?' '+Math.round(m.progress*100)+'%':''}`); } }
+    }).catch(err=>{ tessWorkerPromise=null; throw err; });
+  }
+  return tessWorkerPromise;
+}
+async function ocrBalloon(b){
+  try{
+    const img = $('#pageImg');
+    const nw = img.naturalWidth, nh = img.naturalHeight;
+    const bw = Math.max(1,Math.round(b.w*nw)), bh = Math.max(1,Math.round(b.h*nh));
+    // upscale small crops — OCR engines do much better with taller text
+    const scaleUp = bh < 200 ? Math.min(4, 200/bh) : 1;
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(bw*scaleUp); canvas.height = Math.round(bh*scaleUp);
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.drawImage(img, b.x*nw, b.y*nh, bw, bh, 0, 0, canvas.width, canvas.height);
+    // simple contrast boost: grayscale + threshold-ish curve, helps typical black-text/white-balloon lettering
+    const idata = ctx.getImageData(0,0,canvas.width,canvas.height);
+    const d = idata.data;
+    for(let i=0;i<d.length;i+=4){
+      const gray = 0.299*d[i]+0.587*d[i+1]+0.114*d[i+2];
+      const boosted = gray<140 ? gray*0.6 : Math.min(255, gray*1.15);
+      d[i]=d[i+1]=d[i+2]=boosted;
+    }
+    ctx.putImageData(idata,0,0);
+
+    toastProgress('Carregando OCR local…');
+    const worker = await getTessWorker();
+    const { data } = await worker.recognize(canvas);
+    const text = (data.text||'').replace(/\s+/g,' ').trim();
+    toastEl.classList.remove('show');
+    if(!text){ toast('Não consegui ler texto nesse recorte. Tente ajustar o balão ou digitar manualmente.', 4500); return null; }
+    return text;
+  }catch(e){
+    console.error('OCR local erro', e);
+    toast('OCR local falhou: ' + (e && e.message ? e.message : e) + '. Digite o texto manualmente.', 6000);
+    return null;
+  }
+}
+
+/* ==================== TTS ==================== */
+state.ttsAvailable = ('speechSynthesis' in window) && (typeof SpeechSynthesisUtterance !== 'undefined');
+
+function loadVoices(){
+  if(!state.ttsAvailable) return;
+  state.voices = speechSynthesis.getVoices();
+  const sel = $('#voiceSelect'); if(!sel) return;
+  sel.innerHTML='';
+  const pt = state.voices.filter(v=>v.lang.toLowerCase().startsWith('pt'));
+  const list = pt.length ? pt : state.voices;
+  list.forEach((v,i)=>{
+    const opt=document.createElement('option'); opt.value=v.name; opt.textContent=`${v.name} (${v.lang})`;
+    sel.appendChild(opt);
+  });
+}
+if(state.ttsAvailable){
+  speechSynthesis.onvoiceschanged = loadVoices;
+}
+function speak(text, onend){
+  if(!state.ttsAvailable){
+    if(!state._ttsWarned){ state._ttsWarned=true; toast('Este navegador não tem suporte a voz — mostrando só o texto.', 4000); }
+    if(onend) onend();
+    return;
+  }
+  if(!text){ if(onend) onend(); return; }
+
+  let finished = false;
+  const done = ()=>{ if(finished) return; finished=true; clearTimeout(safety); if(onend) onend(); };
+
+  speechSynthesis.cancel();
+  // correção conhecida: chamar speak() logo após cancel() falha silenciosamente
+  // em vários navegadores Android antigos — um pequeno atraso resolve.
+  setTimeout(()=>{
+    const u = new SpeechSynthesisUtterance(text);
+    const chosenName = localStorage_voice();
+    const v = state.voices.find(v=>v.name===chosenName) || state.voices.find(v=>v.lang.toLowerCase().startsWith('pt-br')) || state.voices.find(v=>v.lang.toLowerCase().startsWith('pt'));
+    if(v) u.voice=v;
+    u.lang = v ? v.lang : 'pt-BR';
+    const rateEl = $('#rateRange');
+    u.rate = parseFloat(rateEl ? rateEl.value : '1');
+    u.onend = done;
+    u.onerror = function(ev){
+      console.error('Erro de fala', ev);
+      toast('Erro ao falar: ' + (ev && ev.error ? ev.error : 'desconhecido'), 4000);
+      done();
+    };
+    try{
+      speechSynthesis.speak(u);
+    }catch(e){
+      toast('Falha ao chamar a voz: ' + e.message, 4000);
+      done();
+      return;
+    }
+    // alguns navegadores Android antigos "pausam" a fila sozinhos — reforça o resume
+    const resumer = setInterval(()=>{
+      if(finished){ clearInterval(resumer); return; }
+      if(speechSynthesis.paused) speechSynthesis.resume();
+    }, 300);
+  }, 120);
+
+  // salvaguarda: se nada acontecer (nem onend nem onerror) em tempo razoável, avança mesmo assim
+  const safety = setTimeout(done, Math.max(4000, text.length*180));
+}
+function localStorage_voice(){ return state._voiceName || null; }
+
+/* ==================== PLAY MODE ==================== */
+$('#btnPlay').addEventListener('click', ()=>{
+  if(state.mode==='play'){ pausePlay(); return; }
+  startPlay();
+});
+function startPlay(){
+  const marks = currentMarks();
+  if(!marks.length){ toast('Nenhum balão marcado nesta página.'); return; }
+  setMode('play');
+  state.playQueue = marks.slice();
+  const startIdx = (state.playPauseIndex!=null && state.playPauseIndex < marks.length) ? state.playPauseIndex : 0;
+  state.playPauseIndex = null;
+  playNext(startIdx);
+}
+function playNext(i){
+  if(state.mode!=='play') return;
+  const marks = currentMarks();
+  if(i>=marks.length){
+    if(state.pageIndex < state.comic.pages.length-1){
+      state.pageIndex++; renderPage();
+      setTimeout(()=>{ setMode('play'); const m2=currentMarks(); if(m2.length) playNext(0); else stopPlay(); }, 450);
+    } else { stopPlay(); toast('Fim do quadrinho.'); }
+    return;
+  }
+  const b = marks[i];
+  highlightBalloon(b);
+  if(state.readZoomOn) showBalloonCard(b);
+  speak(b.text || '', ()=>{
+    if(state.paused) return; // pausado pra edição — não avança sozinho
+    state.playTimer = setTimeout(()=>playNext(i+1), 350);
+  });
+}
+function pausePlay(){
+  clearTimeout(state.playTimer);
+  if(state.ttsAvailable) speechSynthesis.cancel();
+  const marks = currentMarks();
+  const idx = marks.findIndex(x=>x.id===state.activeBalloon);
+  state.playPauseIndex = idx>=0 ? idx : 0;
+  setMode('read');
+}
+function stopPlay(){
+  clearTimeout(state.playTimer);
+  if(state.ttsAvailable) speechSynthesis.cancel();
+  state.playPauseIndex = null;
+  if(state.mode==='play') setMode('read');
+  hideBalloonCard();
+}
+
+/* ==================== SETTINGS ==================== */
+$('#btnSettings').addEventListener('click', ()=>{
+  $('#sheetTitle').textContent='Voz e leitura';
+  const body=$('#sheetBody');
+  if(!state.ttsAvailable){
+    body.innerHTML = `
+      <div class="empty-hint">Este navegador não tem suporte à leitura em voz alta (Web Speech API). Você ainda pode marcar balões e ler o texto normalmente na tela — só a parte de áudio fica indisponível aqui.</div>
+      <div class="empty-hint">As marcações de balão ficam salvas por quadrinho. Para reabrir um livro, selecione o mesmo arquivo CBZ na biblioteca.</div>
+    `;
+    $('#sheet').classList.add('open');
+    return;
+  }
+  body.innerHTML = `
+    <div class="settings-row">
+      <label>Voz em português</label>
+      <select id="voiceSelect"></select>
+    </div>
+    <div class="settings-row">
+      <label>Velocidade da fala</label>
+      <input type="range" id="rateRange" min="0.6" max="1.6" step="0.1" value="1">
+    </div>
+    <div class="row">
+      <button id="btnTestVoice">🔊 Testar voz agora</button>
+    </div>
+    <div class="empty-hint" id="voiceCount"></div>
+    <div class="empty-hint">As marcações de balão ficam salvas por quadrinho. Para reabrir um livro, selecione o mesmo arquivo CBZ na biblioteca.</div>
+  `;
+  loadVoices();
+  setTimeout(()=>{
+    const n = state.voices.length;
+    $('#voiceCount').textContent = n
+      ? `${n} voz(es) encontrada(s) pelo navegador.`
+      : 'Nenhuma voz encontrada pelo navegador (mesmo com um motor de TTS instalado no Android). Isso indica que o navegador não está enxergando as vozes do sistema.';
+  }, 300);
+  $('#voiceSelect').addEventListener('change', e=> state._voiceName = e.target.value);
+  $('#btnTestVoice').addEventListener('click', ()=>{
+    speak('Um, dois, três. Se você está ouvindo isso, a voz está funcionando.');
+  });
+  $('#sheet').classList.add('open');
+});
+
+/* ==================== INIT ==================== */
+window.addEventListener('resize', ()=>{
+  fitImageToStage();
+  if(state.mode==='mark' && state.activeBalloon){
+    const b=currentMarks().find(x=>x.id===state.activeBalloon); if(b) zoomToBalloon(b);
+  } else {
+    resetZoom();
+  }
+  drawBalloons();
+  if(state.cardBalloonId){
+    const b = currentMarks().find(x=>x.id===state.cardBalloonId);
+    if(b) showBalloonCard(b); else hideBalloonCard();
+  }
+});
+$('#stage').addEventListener('wheel', (e)=>{
+  if(!state.comic) return;
+  e.preventDefault();
+  const stage = $('#stage').getBoundingClientRect();
+  if(e.ctrlKey || e.metaKey){
+    const factor = Math.exp(-e.deltaY*0.01);
+    const newScale = Math.min(6, Math.max(0.5, state.viewTransform.scale*factor));
+    const anchorX = (e.clientX - stage.left - state.viewTransform.tx)/state.viewTransform.scale;
+    const anchorY = (e.clientY - stage.top - state.viewTransform.ty)/state.viewTransform.scale;
+    state.viewTransform = {
+      scale:newScale,
+      tx:(e.clientX-stage.left) - anchorX*newScale,
+      ty:(e.clientY-stage.top) - anchorY*newScale
+    };
+  } else {
+    state.viewTransform.tx -= e.deltaX;
+    state.viewTransform.ty -= e.deltaY;
+  }
+  applyViewTransform(false);
+}, {passive:false});
+refreshLibrary();
+loadVoices();
+checkStorageAvailable();
+</script>
+</body>
+</html>
