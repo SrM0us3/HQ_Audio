@@ -3805,24 +3805,38 @@ $('#stage').addEventListener('wheel', (e)=>{
 $('#btnDriveLogin').addEventListener('click', driveLogin);
 $('#btnDriveLogout').addEventListener('click', driveLogout);
 
-$('#btnKomgaSave').addEventListener('click', ()=> komgaSaveCfg());
-$('#btnKomgaReload').addEventListener('click', ()=> komgaLoadSeries(true));
-$('#btnKomgaMore').addEventListener('click', ()=>{ state.komga.page += 1; komgaLoadSeries(false); });
-let _komgaSearchT = null;
-$('#komgaSearch').addEventListener('input', ()=>{
-  clearTimeout(_komgaSearchT);
-  _komgaSearchT = setTimeout(()=>{
-    state.komga.search = ($('#komgaSearch').value || '').trim();
-    state.komga.page = 0;
-    komgaLoadSeries(true);
-  }, 400);
-});
+// Komga (opcional — só se os elementos existirem)
+(function(){
+  const save = $('#btnKomgaSave');
+  if(save) save.addEventListener('click', ()=> komgaSaveCfg());
+  const rel = $('#btnKomgaReload');
+  if(rel) rel.addEventListener('click', ()=> komgaLoadSeries(true));
+  const more = $('#btnKomgaMore');
+  if(more) more.addEventListener('click', ()=>{ state.komga.page += 1; komgaLoadSeries(false); });
+  const ksearch = $('#komgaSearch');
+  if(ksearch){
+    let _komgaSearchT = null;
+    ksearch.addEventListener('input', ()=>{
+      clearTimeout(_komgaSearchT);
+      _komgaSearchT = setTimeout(()=>{
+        state.komga.search = (ksearch.value || '').trim();
+        state.komga.page = 0;
+        komgaLoadSeries(true);
+      }, 400);
+    });
+  }
+  if(typeof komgaLoadCfg === 'function'){
+    try{ komgaLoadCfg(); }catch(_){}
+  }
+})();
+
 document.querySelectorAll('.nav-tabs button').forEach(btn=>{
   btn.addEventListener('click', ()=>{
     const t = btn.getAttribute('data-tab');
     if(t === 'catalog') goCatalog();
     else {
-      $('#screen-catalog').classList.remove('active');
+      const cat = $('#screen-catalog');
+      if(cat) cat.classList.remove('active');
       goLibrary();
       document.querySelectorAll('.nav-tabs button').forEach(b=>{
         b.classList.toggle('on', b.getAttribute('data-tab') === 'library');
@@ -3830,31 +3844,41 @@ document.querySelectorAll('.nav-tabs button').forEach(btn=>{
     }
   });
 });
-komgaLoadCfg();
 
-
-$('#btnCatalogImport').addEventListener('click', ()=> $('#catalogFileInput').click());
-$('#catalogFileInput').addEventListener('change', async (e)=>{
-  const f = e.target.files && e.target.files[0];
-  e.target.value = '';
-  if(!f) return;
-  try{ await catalogImportFile(f); }catch(err){ toast('JSON: ' + (err.message||err), 5000); }
-});
-$('#btnCatalogFromDrive').addEventListener('click', ()=> catalogPullFromDrive());
-$('#btnCatalogClear').addEventListener('click', async ()=>{
-  state.jsonCatalog = null;
-  await storeSet(catalogStoreKey(), null);
-  renderJsonCatalog();
-  toast('Catálogo local limpo', 2000);
-});
-let _catalogSearchT = null;
-if($('#catalogSearch')){
-  $('#catalogSearch').addEventListener('input', ()=>{
-    clearTimeout(_catalogSearchT);
-    _catalogSearchT = setTimeout(()=> renderJsonCatalog(), 250);
+// Catálogo JSON
+(function(){
+  const imp = $('#btnCatalogImport');
+  const fin = $('#catalogFileInput');
+  if(imp && fin){
+    imp.addEventListener('click', ()=> fin.click());
+    fin.addEventListener('change', async (e)=>{
+      const f = e.target.files && e.target.files[0];
+      e.target.value = '';
+      if(!f) return;
+      try{ await catalogImportFile(f); }catch(err){ toast('JSON: ' + (err.message||err), 5000); }
+    });
+  }
+  const fromD = $('#btnCatalogFromDrive');
+  if(fromD) fromD.addEventListener('click', ()=> catalogPullFromDrive());
+  const clr = $('#btnCatalogClear');
+  if(clr) clr.addEventListener('click', async ()=>{
+    state.jsonCatalog = null;
+    await storeSet(catalogStoreKey(), null);
+    renderJsonCatalog();
+    toast('Catálogo local limpo', 2000);
   });
-}
-catalogLoadLocal().then(d=>{ if(d && state.screen==='catalog') renderJsonCatalog(); });
+  const csearch = $('#catalogSearch');
+  if(csearch){
+    let _catalogSearchT = null;
+    csearch.addEventListener('input', ()=>{
+      clearTimeout(_catalogSearchT);
+      _catalogSearchT = setTimeout(()=> renderJsonCatalog(), 250);
+    });
+  }
+  if(typeof catalogLoadLocal === 'function'){
+    catalogLoadLocal().then(d=>{ if(d && state.screen==='catalog') renderJsonCatalog(); });
+  }
+})();
 
 driveRestoreToken().then(()=>driveUpdateUi());
 refreshLibrary();
