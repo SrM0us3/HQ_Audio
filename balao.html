@@ -403,7 +403,7 @@ window.onerror = function(msg, url, line, col, err) {
   <div id="screen-library" class="active">
     <div class="nav-tabs" id="mainTabs">
       <button type="button" class="on" data-tab="library" id="tabLibrary">Biblioteca Balão</button>
-      <button type="button" data-tab="catalog" id="tabCatalog">Catálogo Komga</button>
+      <button type="button" data-tab="catalog" id="tabCatalog">Catálogo</button>
     </div>
     <div class="drive-bar" id="driveBar">
       <div class="drive-status" id="driveStatus">Drive: desconectado</div>
@@ -420,41 +420,27 @@ window.onerror = function(msg, url, line, col, err) {
   </div>
 
 
-  <!-- CATALOG KOMGA -->
+  <!-- CATALOG JSON -->
   <div id="screen-catalog">
     <div class="nav-tabs">
       <button type="button" data-tab="library" id="tabLibrary2">Biblioteca Balão</button>
-      <button type="button" class="on" data-tab="catalog" id="tabCatalog2">Catálogo Komga</button>
+      <button type="button" class="on" data-tab="catalog" id="tabCatalog2">Catálogo</button>
     </div>
-    <div class="komga-cfg" id="komgaCfg">
-      <label>URL do Komga (ex.: http://100.x.x.x:25600)</label>
-      <input id="komgaUrl" placeholder="http://IP:25600" autocomplete="off">
+    <div class="komga-cfg" id="jsonCatalogCfg">
+      <div class="catalog-meta" id="jsonCatalogStatus">Catálogo: nenhum JSON carregado. Gere no PC com o script e importe aqui ou pelo Drive.</div>
       <div class="row">
-        <div>
-          <label>Usuário</label>
-          <input id="komgaUser" placeholder="email ou usuário" autocomplete="username">
-        </div>
-        <div>
-          <label>Senha</label>
-          <input id="komgaPass" type="password" placeholder="senha" autocomplete="current-password">
-        </div>
+        <button type="button" id="btnCatalogImport">Importar catalogo.json</button>
+        <button type="button" class="secondary" id="btnCatalogFromDrive">Baixar do Drive</button>
+        <button type="button" class="secondary" id="btnCatalogClear">Limpar</button>
       </div>
-      <label>Ou API Key (preferível)</label>
-      <input id="komgaKey" type="password" placeholder="X-API-Key do Komga" autocomplete="off">
-      <div class="row">
-        <button type="button" id="btnKomgaSave">Salvar e conectar</button>
-        <button type="button" class="secondary" id="btnKomgaReload">Atualizar lista</button>
-      </div>
-      <div class="catalog-meta" id="komgaStatus">Configure a URL do seu servidor Komga (mesma rede ou ZeroTier).</div>
+      <input type="file" id="catalogFileInput" accept=".json,application/json" style="display:none">
     </div>
     <div class="komga-search">
-      <input id="komgaSearch" placeholder="Buscar série…" type="search">
+      <input id="catalogSearch" placeholder="Buscar série ou título…" type="search">
     </div>
-    <div class="catalog-meta" id="komgaCount"></div>
+    <div class="catalog-meta" id="catalogCount"></div>
     <div class="catalog-grid" id="catalogGrid"></div>
-    <div style="text-align:center;margin:14px 0;">
-      <button type="button" class="btn-primary" id="btnKomgaMore" style="display:none">Carregar mais</button>
-    </div>
+    <div id="catalogDetail" style="display:none;margin-top:12px;padding:12px;background:var(--panel);border:1px solid var(--border);border-radius:12px;"></div>
   </div>
 
   <!-- READER -->
@@ -3171,6 +3157,171 @@ async function ocrBalloon(b){
 }
 
 
+
+/* ==================== CATÁLOGO JSON (espelho da biblioteca) ==================== */
+state.jsonCatalog = null;
+
+function catalogStoreKey(){ return 'catalogo-json'; }
+
+async function catalogSaveLocal(data){
+  state.jsonCatalog = data;
+  await storeSet(catalogStoreKey(), data);
+}
+
+async function catalogLoadLocal(){
+  const data = await storeGet(catalogStoreKey());
+  if(data && data.series){
+    state.jsonCatalog = data;
+    return data;
+  }
+  return null;
+}
+
+function catalogApplyFilter(q){
+  const data = state.jsonCatalog;
+  if(!data || !data.series) return [];
+  q = (q || '').trim().toLowerCase();
+  if(!q) return data.series;
+  return data.series.filter(s=>{
+    if((s.name || '').toLowerCase().indexOf(q) >= 0) return true;
+    return (s.books || []).some(b=>{
+      const t = ((b.title||'') + ' ' + (b.filename||'') + ' ' + (b.number||'')).toLowerCase();
+      return t.indexOf(q) >= 0;
+    });
+  });
+}
+
+function renderJsonCatalog(){
+  const grid = $('#catalogGrid');
+  const count = $('#catalogCount');
+  const status = $('#jsonCatalogStatus');
+  const detail = $('#catalogDetail');
+  if(detail) detail.style.display = 'none';
+  if(!grid) return;
+  grid.innerHTML = '';
+  const data = state.jsonCatalog;
+  if(!data){
+    if(count) count.textContent = '';
+    if(status) status.textContent = 'Catálogo: nenhum JSON carregado.';
+    return;
+  }
+  const q = ($('#catalogSearch') && $('#catalogSearch').value) || '';
+  const series = catalogApplyFilter(q);
+  if(status){
+    status.textContent = 'Atualizado: ' + (data.generatedAt || '?') +
+      ' · ' + (data.totalBooks || 0) + ' volumes · ' + (data.totalSeries || 0) + ' séries' +
+      (data.withComicInfo != null ? (' · ComicInfo: ' + data.withComicInfo) : '');
+  }
+  if(count) count.textContent = series.length + ' séries' + (q ? ' (filtrado)' : '');
+  if(!series.length){
+    grid.innerHTML = '<div class="catalog-empty">Nenhuma série encontrada.</div>';
+    return;
+  }
+  series.forEach(s=>{
+    const el = document.createElement('div');
+    el.className = 'catalog-card';
+    const years = [s.year_min, s.year_max].filter(Boolean);
+    const yearTxt = years.length ? (years[0] === years[1] ? years[0] : years[0] + '–' + years[1]) : '';
+    el.innerHTML =
+      '<div class="catalog-cover" style="aspect-ratio:auto;min-height:64px;padding:12px;text-align:center;font-size:22px;">📚</div>' +
+      '<div class="catalog-info">' +
+        '<div class="catalog-title"></div>' +
+        '<div class="catalog-sub"></div>' +
+      '</div>';
+    el.querySelector('.catalog-title').textContent = s.name || 'Sem série';
+    el.querySelector('.catalog-sub').textContent =
+      (s.count || (s.books && s.books.length) || 0) + ' vol.' + (yearTxt ? ' · ' + yearTxt : '');
+    el.onclick = ()=> showCatalogSeriesDetail(s);
+    grid.appendChild(el);
+  });
+}
+
+function showCatalogSeriesDetail(s){
+  const detail = $('#catalogDetail');
+  if(!detail) return;
+  detail.style.display = 'block';
+  const books = s.books || [];
+  let html = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">' +
+    '<b style="font-size:16px;"></b>' +
+    '<button type="button" class="secondary" id="btnCatalogDetailClose" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);">Fechar</button>' +
+    '</div>';
+  html += '<div class="catalog-meta" style="margin-bottom:8px;"></div>';
+  html += '<div style="max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;"></div>';
+  detail.innerHTML = html;
+  detail.querySelector('b').textContent = s.name || 'Série';
+  detail.querySelector('.catalog-meta').textContent = books.length + ' volumes';
+  const list = detail.querySelector('div[style*="max-height"]');
+  books.forEach(b=>{
+    const row = document.createElement('div');
+    row.style.cssText = 'padding:8px 10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);';
+    const line1 = document.createElement('div');
+    line1.style.fontWeight = '600';
+    line1.style.fontSize = '13px';
+    line1.textContent = (b.number ? '#' + b.number + ' · ' : '') + (b.title || b.filename || '');
+    const line2 = document.createElement('div');
+    line2.style.cssText = 'font-size:11px;color:var(--text-dim);margin-top:2px;';
+    const bits = [];
+    if(b.year) bits.push(b.year);
+    if(b.publisher) bits.push(b.publisher);
+    if(b.source) bits.push(b.source);
+    line2.textContent = bits.join(' · ');
+    row.appendChild(line1);
+    row.appendChild(line2);
+    if(b.summary){
+      const sum = document.createElement('div');
+      sum.style.cssText = 'font-size:12px;margin-top:6px;line-height:1.35;opacity:.9;';
+      sum.textContent = b.summary.length > 280 ? b.summary.slice(0, 280) + '…' : b.summary;
+      row.appendChild(sum);
+    }
+    list.appendChild(row);
+  });
+  const closeBtn = $('#btnCatalogDetailClose');
+  if(closeBtn) closeBtn.onclick = ()=>{ detail.style.display = 'none'; };
+  try{ detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }catch(_){}
+}
+
+async function catalogImportFile(file){
+  const text = await file.text();
+  const data = JSON.parse(text);
+  if(!data.series || !Array.isArray(data.series)){
+    throw new Error('JSON inválido: falta series[]');
+  }
+  await catalogSaveLocal(data);
+  renderJsonCatalog();
+  toast('Catálogo importado: ' + (data.totalBooks || 0) + ' volumes', 3000);
+}
+
+async function catalogPullFromDrive(){
+  if(!state.drive || !state.drive.token){
+    toast('Entre no Google Drive primeiro (aba Biblioteca)', 4000);
+    return;
+  }
+  try{
+    toastProgress('Buscando catalogo.json no Drive…');
+    const folderId = await driveEnsureFolder();
+    const q = encodeURIComponent("name='catalogo.json' and '" + folderId + "' in parents and trashed=false");
+    const res = await driveFetch('/drive/v3/files?q=' + q + '&fields=files(id,name,modifiedTime)&pageSize=5');
+    const data = await res.json();
+    if(!res.ok) throw new Error((data.error && data.error.message) || 'erro Drive');
+    const f = data.files && data.files[0];
+    if(!f){
+      toast('catalogo.json não encontrado na pasta Balao HQ', 4000);
+      return;
+    }
+    const dl = await driveFetch('/drive/v3/files/' + f.id + '?alt=media');
+    if(!dl.ok) throw new Error('Falha ao baixar catalogo.json');
+    const json = await dl.json();
+    if(!json.series) throw new Error('JSON sem series[]');
+    await catalogSaveLocal(json);
+    renderJsonCatalog();
+    toast('Catálogo do Drive carregado ✓', 3000);
+  }catch(e){
+    console.error(e);
+    toast('Drive: ' + (e.message || e), 5000);
+  }
+}
+
+
 /* ==================== KOMGA CATÁLOGO ==================== */
 state.komga = {
   url: '',
@@ -3345,7 +3496,7 @@ async function komgaLoadCover(seriesId, el){
 }
 
 function goCatalog(){
-  stopPlay && stopPlay();
+  try{ if(typeof stopPlay === 'function') stopPlay(); }catch(_){}
   state.screen = 'catalog';
   $('#screen-library').classList.remove('active');
   $('#screen-reader').classList.remove('active');
@@ -3353,12 +3504,14 @@ function goCatalog(){
   if(cat) cat.classList.add('active');
   $('#btnBack').style.display = 'none';
   $('#btnDownload').style.display = 'none';
-  $('#topSub').textContent = 'catálogo Komga';
+  $('#topSub').textContent = 'catálogo';
   document.querySelectorAll('.nav-tabs button').forEach(b=>{
     b.classList.toggle('on', b.getAttribute('data-tab') === 'catalog');
   });
-  if(state.komga.url && !$('#catalogGrid').children.length){
-    komgaLoadSeries(true);
+  if(state.jsonCatalog){
+    renderJsonCatalog();
+  } else {
+    catalogLoadLocal().then(d=>{ if(d) renderJsonCatalog(); });
   }
 }
 
@@ -3678,6 +3831,30 @@ document.querySelectorAll('.nav-tabs button').forEach(btn=>{
   });
 });
 komgaLoadCfg();
+
+
+$('#btnCatalogImport').addEventListener('click', ()=> $('#catalogFileInput').click());
+$('#catalogFileInput').addEventListener('change', async (e)=>{
+  const f = e.target.files && e.target.files[0];
+  e.target.value = '';
+  if(!f) return;
+  try{ await catalogImportFile(f); }catch(err){ toast('JSON: ' + (err.message||err), 5000); }
+});
+$('#btnCatalogFromDrive').addEventListener('click', ()=> catalogPullFromDrive());
+$('#btnCatalogClear').addEventListener('click', async ()=>{
+  state.jsonCatalog = null;
+  await storeSet(catalogStoreKey(), null);
+  renderJsonCatalog();
+  toast('Catálogo local limpo', 2000);
+});
+let _catalogSearchT = null;
+if($('#catalogSearch')){
+  $('#catalogSearch').addEventListener('input', ()=>{
+    clearTimeout(_catalogSearchT);
+    _catalogSearchT = setTimeout(()=> renderJsonCatalog(), 250);
+  });
+}
+catalogLoadLocal().then(d=>{ if(d && state.screen==='catalog') renderJsonCatalog(); });
 
 driveRestoreToken().then(()=>driveUpdateUi());
 refreshLibrary();
