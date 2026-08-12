@@ -3160,6 +3160,7 @@ async function ocrBalloon(b){
 
 /* ==================== CATÁLOGO JSON (espelho da biblioteca) ==================== */
 state.jsonCatalog = null;
+state.catalogNav = { level: 'publishers', pub: null, series: null, saga: null, mode: 'series' };
 
 function catalogStoreKey(){ return 'catalogo-json'; }
 
@@ -3191,6 +3192,23 @@ function catalogApplyFilter(q){
   });
 }
 
+
+function catalogBack(){
+  const n = state.catalogNav || { level: 'publishers' };
+  if(n.level === 'books' || n.level === 'arcs' || n.level === 'sagaBooks'){
+    if(n.mode === 'saga' && n.level === 'sagaBooks'){ n.level = 'sagas'; n.saga = null; }
+    else if(n.level === 'books' && n.series){ n.level = 'arcs'; }
+    else if(n.level === 'arcs'){ n.level = 'series'; n.series = null; }
+    else { n.level = 'series'; n.series = null; }
+  } else if(n.level === 'sagas' || n.level === 'series'){
+    n.level = 'publishers'; n.pub = null; n.mode = 'series';
+  } else {
+    n.level = 'publishers';
+  }
+  state.catalogNav = n;
+  renderJsonCatalog();
+}
+
 function renderJsonCatalog(){
   const grid = $('#catalogGrid');
   const count = $('#catalogCount');
@@ -3205,80 +3223,217 @@ function renderJsonCatalog(){
     if(status) status.textContent = 'Catálogo: nenhum JSON carregado.';
     return;
   }
-  const q = ($('#catalogSearch') && $('#catalogSearch').value) || '';
-  const series = catalogApplyFilter(q);
+  if(!state.catalogNav) state.catalogNav = { level: 'publishers', pub: null, series: null, saga: null, mode: 'series' };
+  const nav = state.catalogNav;
+  const q = (($('#catalogSearch') && $('#catalogSearch').value) || '').trim().toLowerCase();
+
   if(status){
-    status.textContent = 'Atualizado: ' + (data.generatedAt || '?') +
-      ' · ' + (data.totalBooks || 0) + ' volumes · ' + (data.totalSeries || 0) + ' séries' +
-      (data.withComicInfo != null ? (' · ComicInfo: ' + data.withComicInfo) : '');
+    status.textContent = 'v' + (data.version||'?') + ' · ' + (data.generatedAt||'?') +
+      ' · ' + (data.totalBooks||0) + ' vols · ' + (data.totalSeries||0) + ' séries' +
+      (data.withSeriesGroup != null ? (' · sagas: ' + data.withSeriesGroup) : '') +
+      (data.withStoryArc != null ? (' · c/arco: ' + data.withStoryArc) : '');
   }
-  if(count) count.textContent = series.length + ' séries' + (q ? ' (filtrado)' : '');
-  if(!series.length){
-    grid.innerHTML = '<div class="catalog-empty">Nenhuma série encontrada.</div>';
-    return;
+
+  // breadcrumb + mode toggle
+  const bar = document.createElement('div');
+  bar.style.cssText = 'grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;';
+  if(nav.level !== 'publishers'){
+    const back = document.createElement('button');
+    back.type = 'button';
+    back.textContent = '← Voltar';
+    back.style.cssText = 'padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-family:inherit;cursor:pointer;';
+    back.onclick = () => catalogBack();
+    bar.appendChild(back);
   }
-  series.forEach(s=>{
+  const crumb = document.createElement('span');
+  crumb.style.cssText = 'font-size:13px;color:var(--text-dim);flex:1;';
+  const bits = [];
+  if(nav.pub) bits.push(nav.pub.name);
+  if(nav.mode === 'saga') bits.push('Sagas');
+  else if(nav.level !== 'publishers') bits.push('Séries');
+  if(nav.series) bits.push(nav.series.name);
+  if(nav.saga) bits.push(nav.saga.name);
+  crumb.textContent = bits.join(' › ') || 'Editoras';
+  bar.appendChild(crumb);
+  grid.appendChild(bar);
+
+  function addCard(title, sub, onClick, icon){
     const el = document.createElement('div');
     el.className = 'catalog-card';
-    const years = [s.year_min, s.year_max].filter(Boolean);
-    const yearTxt = years.length ? (years[0] === years[1] ? years[0] : years[0] + '–' + years[1]) : '';
-    el.innerHTML =
-      '<div class="catalog-cover" style="aspect-ratio:auto;min-height:64px;padding:12px;text-align:center;font-size:22px;">📚</div>' +
-      '<div class="catalog-info">' +
-        '<div class="catalog-title"></div>' +
-        '<div class="catalog-sub"></div>' +
-      '</div>';
-    el.querySelector('.catalog-title').textContent = s.name || 'Sem série';
-    el.querySelector('.catalog-sub').textContent =
-      (s.count || (s.books && s.books.length) || 0) + ' vol.' + (yearTxt ? ' · ' + yearTxt : '');
-    el.onclick = ()=> showCatalogSeriesDetail(s);
+    el.innerHTML = '<div class="catalog-cover" style="aspect-ratio:2/3;display:flex;align-items:center;justify-content:center;font-size:28px;">'+(icon||'📚')+'</div><div class="catalog-info"><div class="catalog-title"></div><div class="catalog-sub"></div></div>';
+    el.querySelector('.catalog-title').textContent = title;
+    el.querySelector('.catalog-sub').textContent = sub || '';
+    el.onclick = onClick;
     grid.appendChild(el);
-  });
+  }
+
+  function showBooks(list, orderLabel){
+    if(count) count.textContent = (list||[]).length + ' edições' + (orderLabel ? ' · ordem: ' + orderLabel : '');
+    if(detail){ detail.style.display = 'block'; detail.innerHTML = ''; }
+    const box = detail || grid;
+    if(detail) detail.style.display = 'block';
+    const host = document.createElement('div');
+    host.style.cssText = 'grid-column:1/-1;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;';
+    (list||[]).forEach((b, idx) => {
+      const row = document.createElement('div');
+      row.style.cssText = 'padding:10px;border-radius:10px;background:var(--panel);border:1px solid var(--border);';
+      const t = document.createElement('div');
+      t.style.cssText = 'font-weight:600;font-size:13px;';
+      const num = b.alternate_number && orderLabel === 'AlternateNumber' ? b.alternate_number : (b.number || '');
+      t.textContent = (num ? '#' + num + ' · ' : '') + (b.title || b.filename || '');
+      const s = document.createElement('div');
+      s.style.cssText = 'font-size:11px;color:var(--text-dim);margin-top:2px;';
+      const bits2 = [];
+      if(b.series) bits2.push(b.series);
+      if(b.year) bits2.push(b.year);
+      if(b.story_arc) bits2.push('arco: ' + b.story_arc);
+      if(b.series_group) bits2.push('saga: ' + b.series_group);
+      if(b.alternate_number) bits2.push('alt#: ' + b.alternate_number);
+      s.textContent = bits2.join(' · ');
+      row.appendChild(t); row.appendChild(s);
+      if(b.summary){
+        const sum = document.createElement('div');
+        sum.style.cssText = 'font-size:12px;margin-top:6px;line-height:1.35;opacity:.9;';
+        sum.textContent = b.summary.length > 220 ? b.summary.slice(0,220)+'…' : b.summary;
+        row.appendChild(sum);
+      }
+      host.appendChild(row);
+    });
+    grid.appendChild(host);
+  }
+
+  // ---- levels ----
+  if(nav.level === 'publishers'){
+    let pubs = data.publishers || [];
+    if(!pubs.length && data.series){
+      pubs = [{ name: 'Todas', series: data.series, sagas: [], seriesCount: data.series.length, bookCount: data.totalBooks }];
+    }
+    if(count) count.textContent = pubs.length + ' editoras';
+    pubs.forEach(pub => {
+      addCard(pub.name || 'Editora',
+        (pub.seriesCount|| (pub.series||[]).length) + ' séries · ' + (pub.sagaCount|| (pub.sagas||[]).length) + ' sagas · ' + (pub.bookCount||'') + ' vols',
+        () => {
+          state.catalogNav = { level: 'series', pub: pub, series: null, saga: null, mode: 'series' };
+          renderJsonCatalog();
+        }, '🏢');
+    });
+    return;
+  }
+
+  const pub = nav.pub;
+  if(!pub){ nav.level = 'publishers'; renderJsonCatalog(); return; }
+
+  if(nav.level === 'series' || nav.level === 'sagas'){
+    // toggle series / sagas
+    const tog = document.createElement('div');
+    tog.style.cssText = 'grid-column:1/-1;display:flex;gap:8px;margin-bottom:4px;';
+    [['series','Séries'],['sagas','Sagas / eventos']].forEach(([mode, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      const on = (nav.mode === mode) || (nav.level === mode);
+      b.style.cssText = 'flex:1;padding:10px;border-radius:10px;border:none;font-weight:600;font-family:inherit;cursor:pointer;' +
+        (on ? 'background:var(--accent);color:#fff;' : 'background:var(--panel-2);color:var(--text);border:1px solid var(--border);');
+      b.onclick = () => {
+        state.catalogNav = { level: mode, pub: pub, series: null, saga: null, mode: mode };
+        renderJsonCatalog();
+      };
+      tog.appendChild(b);
+    });
+    grid.appendChild(tog);
+
+    if(nav.mode === 'sagas' || nav.level === 'sagas'){
+      let sagas = pub.sagas || [];
+      if(q) sagas = sagas.filter(s => (s.name||'').toLowerCase().indexOf(q)>=0);
+      if(count) count.textContent = sagas.length + ' sagas/eventos';
+      if(!sagas.length){
+        grid.appendChild(Object.assign(document.createElement('div'), { className: 'catalog-empty', textContent: 'Nenhuma saga (SeriesGroup) nesta editora.', style: 'grid-column:1/-1;padding:12px;color:var(--text-dim);' }));
+        return;
+      }
+      sagas.forEach(sg => {
+        addCard(sg.name, (sg.count||0) + ' eds · ordem: AlternateNumber', () => {
+          state.catalogNav = { level: 'sagaBooks', pub: pub, saga: sg, series: null, mode: 'saga' };
+          renderJsonCatalog();
+        }, '📖');
+      });
+      return;
+    }
+
+    // series list
+    let series = pub.series || [];
+    if(q){
+      series = series.filter(s => {
+        if((s.name||'').toLowerCase().indexOf(q)>=0) return true;
+        return (s.books||[]).some(b => ((b.title||'')+' '+(b.filename||'')).toLowerCase().indexOf(q)>=0);
+      });
+    }
+    if(count) count.textContent = series.length + ' séries';
+    series.forEach(s => {
+      const nArc = (s.arcs && s.arcs.length) || 0;
+      addCard(s.name, (s.count||0) + ' vols' + (nArc ? (' · ' + nArc + ' arcos') : ''), () => {
+        state.catalogNav = { level: 'arcs', pub: pub, series: s, saga: null, mode: 'series' };
+        renderJsonCatalog();
+      });
+    });
+    return;
+  }
+
+  if(nav.level === 'arcs' && nav.series){
+    const s = nav.series;
+    const arcs = s.arcs || [];
+    if(count) count.textContent = (arcs.length) + ' arcos · ' + (s.count||0) + ' vols';
+    // all issues
+    addCard('Todas as edições', (s.count||0) + ' · ordem: Number', () => {
+      state.catalogNav = { level: 'books', pub: pub, series: s, arc: null, mode: 'series', books: s.books, order: 'Number' };
+      renderJsonCatalog();
+    }, '📚');
+    arcs.forEach(a => {
+      addCard(a.name, (a.count||0) + ' eds', () => {
+        state.catalogNav = { level: 'books', pub: pub, series: s, arc: a, mode: 'series', books: a.books, order: 'Number' };
+        renderJsonCatalog();
+      }, '📎');
+    });
+    if(s.booksNoArc && s.booksNoArc.length){
+      addCard('Sem arco', s.booksNoArc.length + ' eds', () => {
+        state.catalogNav = { level: 'books', pub: pub, series: s, mode: 'series', books: s.booksNoArc, order: 'Number' };
+        renderJsonCatalog();
+      }, '•');
+    }
+    return;
+  }
+
+  if(nav.level === 'books'){
+    showBooks(nav.books || [], nav.order || 'Number');
+    return;
+  }
+
+  if(nav.level === 'sagaBooks' && nav.saga){
+    const sg = nav.saga;
+    // optional: series inside saga as cards + full reading order
+    addCard('Ordem de leitura completa', (sg.count||0) + ' · AlternateNumber', () => {
+      state.catalogNav = { level: 'books', pub: pub, saga: sg, mode: 'saga', books: sg.books, order: 'AlternateNumber' };
+      renderJsonCatalog();
+    }, '📖');
+    (sg.series || []).forEach(s => {
+      addCard(s.name, (s.count||0) + ' eds (na saga)', () => {
+        state.catalogNav = { level: 'books', pub: pub, saga: sg, series: s, mode: 'saga', books: s.books, order: 'AlternateNumber' };
+        renderJsonCatalog();
+      });
+    });
+    return;
+  }
+
+  nav.level = 'publishers';
+  renderJsonCatalog();
 }
 
 function showCatalogSeriesDetail(s){
-  const detail = $('#catalogDetail');
-  if(!detail) return;
-  detail.style.display = 'block';
-  const books = s.books || [];
-  let html = '<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;">' +
-    '<b style="font-size:16px;"></b>' +
-    '<button type="button" class="secondary" id="btnCatalogDetailClose" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);">Fechar</button>' +
-    '</div>';
-  html += '<div class="catalog-meta" style="margin-bottom:8px;"></div>';
-  html += '<div style="max-height:50vh;overflow-y:auto;display:flex;flex-direction:column;gap:8px;"></div>';
-  detail.innerHTML = html;
-  detail.querySelector('b').textContent = s.name || 'Série';
-  detail.querySelector('.catalog-meta').textContent = books.length + ' volumes';
-  const list = detail.querySelector('div[style*="max-height"]');
-  books.forEach(b=>{
-    const row = document.createElement('div');
-    row.style.cssText = 'padding:8px 10px;border-radius:8px;background:var(--panel-2);border:1px solid var(--border);';
-    const line1 = document.createElement('div');
-    line1.style.fontWeight = '600';
-    line1.style.fontSize = '13px';
-    line1.textContent = (b.number ? '#' + b.number + ' · ' : '') + (b.title || b.filename || '');
-    const line2 = document.createElement('div');
-    line2.style.cssText = 'font-size:11px;color:var(--text-dim);margin-top:2px;';
-    const bits = [];
-    if(b.year) bits.push(b.year);
-    if(b.publisher) bits.push(b.publisher);
-    if(b.source) bits.push(b.source);
-    line2.textContent = bits.join(' · ');
-    row.appendChild(line1);
-    row.appendChild(line2);
-    if(b.summary){
-      const sum = document.createElement('div');
-      sum.style.cssText = 'font-size:12px;margin-top:6px;line-height:1.35;opacity:.9;';
-      sum.textContent = b.summary.length > 280 ? b.summary.slice(0, 280) + '…' : b.summary;
-      row.appendChild(sum);
-    }
-    list.appendChild(row);
-  });
-  const closeBtn = $('#btnCatalogDetailClose');
-  if(closeBtn) closeBtn.onclick = ()=>{ detail.style.display = 'none'; };
-  try{ detail.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); }catch(_){}
+  // compat: abre nível arcs
+  const pub = (state.catalogNav && state.catalogNav.pub) || { name: s.publisherGroup || 'Todas', series: [s], sagas: [] };
+  state.catalogNav = { level: 'arcs', pub: pub, series: s, saga: null, mode: 'series' };
+  renderJsonCatalog();
 }
+
 
 async function catalogImportFile(file){
   const text = await file.text();
@@ -3287,6 +3442,7 @@ async function catalogImportFile(file){
     throw new Error('JSON inválido: falta series[]');
   }
   await catalogSaveLocal(data);
+  state.catalogNav = { level: 'publishers', pub: null, series: null, saga: null, mode: 'series' };
   renderJsonCatalog();
   toast('Catálogo importado: ' + (data.totalBooks || 0) + ' volumes', 3000);
 }
