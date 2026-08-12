@@ -427,7 +427,7 @@ window.onerror = function(msg, url, line, col, err) {
       <button type="button" class="on" data-tab="catalog" id="tabCatalog2">Catálogo</button>
     </div>
     <div class="komga-cfg" id="jsonCatalogCfg">
-      <div class="catalog-meta" id="jsonCatalogStatus">Catálogo: nenhum JSON carregado. Gere no PC com o script e importe aqui ou pelo Drive.</div>
+      <div class="catalog-meta" id="jsonCatalogStatus">Catálogo: nenhum JSON. Coloque catalogo.json na pasta Balao HQ do Drive e entre no Google, ou importe o arquivo.</div>
       <div class="row">
         <button type="button" id="btnCatalogImport">Importar catalogo.json</button>
         <button type="button" class="secondary" id="btnCatalogFromDrive">Baixar do Drive</button>
@@ -3193,13 +3193,12 @@ function catalogApplyFilter(q){
 }
 
 
+
 function catalogBack(){
   const n = state.catalogNav || { level: 'publishers' };
-  if(n.level === 'books' || n.level === 'arcs' || n.level === 'sagaBooks'){
-    if(n.mode === 'saga' && n.level === 'sagaBooks'){ n.level = 'sagas'; n.saga = null; }
-    else if(n.level === 'books' && n.series){ n.level = 'arcs'; }
-    else if(n.level === 'arcs'){ n.level = 'series'; n.series = null; }
-    else { n.level = 'series'; n.series = null; }
+  if(n.level === 'books' || n.level === 'sagaBooks'){
+    if(n.mode === 'saga'){ n.level = 'sagas'; n.saga = null; n.books = null; }
+    else { n.level = 'series'; n.series = null; n.books = null; }
   } else if(n.level === 'sagas' || n.level === 'series'){
     n.level = 'publishers'; n.pub = null; n.mode = 'series';
   } else {
@@ -3211,7 +3210,7 @@ function catalogBack(){
 
 function renderJsonCatalog(){
   const grid = $('#catalogGrid');
-  const count = $('#catalogCount');
+  const countEl = $('#catalogCount');
   const status = $('#jsonCatalogStatus');
   const detail = $('#catalogDetail');
   if(detail) detail.style.display = 'none';
@@ -3219,8 +3218,8 @@ function renderJsonCatalog(){
   grid.innerHTML = '';
   const data = state.jsonCatalog;
   if(!data){
-    if(count) count.textContent = '';
-    if(status) status.textContent = 'Catálogo: nenhum JSON carregado.';
+    if(countEl) countEl.textContent = '';
+    if(status) status.textContent = 'Catálogo: nenhum JSON. Entre no Google (Balao HQ) ou importe o arquivo.';
     return;
   }
   if(!state.catalogNav) state.catalogNav = { level: 'publishers', pub: null, series: null, saga: null, mode: 'series' };
@@ -3228,13 +3227,10 @@ function renderJsonCatalog(){
   const q = (($('#catalogSearch') && $('#catalogSearch').value) || '').trim().toLowerCase();
 
   if(status){
-    status.textContent = 'v' + (data.version||'?') + ' · ' + (data.generatedAt||'?') +
-      ' · ' + (data.totalBooks||0) + ' vols · ' + (data.totalSeries||0) + ' séries' +
-      (data.withSeriesGroup != null ? (' · sagas: ' + data.withSeriesGroup) : '') +
-      (data.withStoryArc != null ? (' · c/arco: ' + data.withStoryArc) : '');
+    const meta = 'v' + (data.version||'?') + ' · ' + (data.totalBooks||0) + ' vols · ' + (data.totalSeries||0) + ' séries';
+    status.textContent = meta + (data.generatedAt ? (' · ' + data.generatedAt) : '');
   }
 
-  // breadcrumb + mode toggle
   const bar = document.createElement('div');
   bar.style.cssText = 'grid-column:1/-1;display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;';
   if(nav.level !== 'publishers'){
@@ -3249,8 +3245,8 @@ function renderJsonCatalog(){
   crumb.style.cssText = 'font-size:13px;color:var(--text-dim);flex:1;';
   const bits = [];
   if(nav.pub) bits.push(nav.pub.name);
-  if(nav.mode === 'saga') bits.push('Sagas');
-  else if(nav.level !== 'publishers') bits.push('Séries');
+  if(nav.mode === 'saga' || nav.level === 'sagas' || nav.level === 'sagaBooks') bits.push('Sagas');
+  else if(nav.level === 'series' || nav.level === 'books') bits.push('Séries');
   if(nav.series) bits.push(nav.series.name);
   if(nav.saga) bits.push(nav.saga.name);
   crumb.textContent = bits.join(' › ') || 'Editoras';
@@ -3267,29 +3263,25 @@ function renderJsonCatalog(){
     grid.appendChild(el);
   }
 
-  function showBooks(list, orderLabel){
-    if(count) count.textContent = (list||[]).length + ' edições' + (orderLabel ? ' · ordem: ' + orderLabel : '');
-    if(detail){ detail.style.display = 'block'; detail.innerHTML = ''; }
-    const box = detail || grid;
-    if(detail) detail.style.display = 'block';
+  function showBookList(list, orderLabel){
+    if(countEl) countEl.textContent = (list||[]).length + ' edições' + (orderLabel ? ' · ' + orderLabel : '');
     const host = document.createElement('div');
-    host.style.cssText = 'grid-column:1/-1;display:flex;flex-direction:column;gap:8px;max-height:60vh;overflow-y:auto;';
-    (list||[]).forEach((b, idx) => {
+    host.style.cssText = 'grid-column:1/-1;display:flex;flex-direction:column;gap:8px;max-height:62vh;overflow-y:auto;';
+    (list||[]).forEach(b => {
       const row = document.createElement('div');
       row.style.cssText = 'padding:10px;border-radius:10px;background:var(--panel);border:1px solid var(--border);';
       const t = document.createElement('div');
       t.style.cssText = 'font-weight:600;font-size:13px;';
-      const num = b.alternate_number && orderLabel === 'AlternateNumber' ? b.alternate_number : (b.number || '');
+      const num = (orderLabel === 'AlternateNumber' && b.alternate_number) ? b.alternate_number : (b.number || '');
       t.textContent = (num ? '#' + num + ' · ' : '') + (b.title || b.filename || '');
       const s = document.createElement('div');
       s.style.cssText = 'font-size:11px;color:var(--text-dim);margin-top:2px;';
-      const bits2 = [];
-      if(b.series) bits2.push(b.series);
-      if(b.year) bits2.push(b.year);
-      if(b.story_arc) bits2.push('arco: ' + b.story_arc);
-      if(b.series_group) bits2.push('saga: ' + b.series_group);
-      if(b.alternate_number) bits2.push('alt#: ' + b.alternate_number);
-      s.textContent = bits2.join(' · ');
+      const b2 = [];
+      if(b.series) b2.push(b.series);
+      if(b.year) b2.push(b.year);
+      if(b.story_arc) b2.push(b.story_arc);
+      if(b.series_group) b2.push('saga: ' + b.series_group);
+      s.textContent = b2.join(' · ');
       row.appendChild(t); row.appendChild(s);
       if(b.summary){
         const sum = document.createElement('div');
@@ -3302,16 +3294,16 @@ function renderJsonCatalog(){
     grid.appendChild(host);
   }
 
-  // ---- levels ----
+  // --- publishers ---
   if(nav.level === 'publishers'){
     let pubs = data.publishers || [];
     if(!pubs.length && data.series){
-      pubs = [{ name: 'Todas', series: data.series, sagas: [], seriesCount: data.series.length, bookCount: data.totalBooks }];
+      pubs = [{ name: 'Todas', series: data.series, sagas: [], seriesCount: data.series.length, bookCount: data.totalBooks, sagaCount: 0 }];
     }
-    if(count) count.textContent = pubs.length + ' editoras';
+    if(countEl) countEl.textContent = pubs.length + ' editoras';
     pubs.forEach(pub => {
       addCard(pub.name || 'Editora',
-        (pub.seriesCount|| (pub.series||[]).length) + ' séries · ' + (pub.sagaCount|| (pub.sagas||[]).length) + ' sagas · ' + (pub.bookCount||'') + ' vols',
+        (pub.seriesCount || (pub.series||[]).length) + ' séries · ' + (pub.sagaCount || (pub.sagas||[]).length) + ' sagas',
         () => {
           state.catalogNav = { level: 'series', pub: pub, series: null, saga: null, mode: 'series' };
           renderJsonCatalog();
@@ -3321,10 +3313,10 @@ function renderJsonCatalog(){
   }
 
   const pub = nav.pub;
-  if(!pub){ nav.level = 'publishers'; renderJsonCatalog(); return; }
+  if(!pub){ state.catalogNav.level = 'publishers'; renderJsonCatalog(); return; }
 
+  // --- series or sagas list ---
   if(nav.level === 'series' || nav.level === 'sagas'){
-    // toggle series / sagas
     const tog = document.createElement('div');
     tog.style.cssText = 'grid-column:1/-1;display:flex;gap:8px;margin-bottom:4px;';
     [['series','Séries'],['sagas','Sagas / eventos']].forEach(([mode, label]) => {
@@ -3345,94 +3337,122 @@ function renderJsonCatalog(){
     if(nav.mode === 'sagas' || nav.level === 'sagas'){
       let sagas = pub.sagas || [];
       if(q) sagas = sagas.filter(s => (s.name||'').toLowerCase().indexOf(q)>=0);
-      if(count) count.textContent = sagas.length + ' sagas/eventos';
+      if(countEl) countEl.textContent = sagas.length + ' sagas';
       if(!sagas.length){
-        grid.appendChild(Object.assign(document.createElement('div'), { className: 'catalog-empty', textContent: 'Nenhuma saga (SeriesGroup) nesta editora.', style: 'grid-column:1/-1;padding:12px;color:var(--text-dim);' }));
+        const empty = document.createElement('div');
+        empty.style.cssText = 'grid-column:1/-1;padding:12px;color:var(--text-dim);';
+        empty.textContent = 'Nenhuma saga (SeriesGroup) nos metadados desta editora.';
+        grid.appendChild(empty);
         return;
       }
       sagas.forEach(sg => {
-        addCard(sg.name, (sg.count||0) + ' eds · ordem: AlternateNumber', () => {
-          state.catalogNav = { level: 'sagaBooks', pub: pub, saga: sg, series: null, mode: 'saga' };
+        addCard(sg.name, (sg.count||0) + ' eds · ordem AlternateNumber', () => {
+          state.catalogNav = { level: 'sagaBooks', pub: pub, saga: sg, mode: 'saga' };
           renderJsonCatalog();
         }, '📖');
       });
       return;
     }
 
-    // series list
+    // SERIES list — highlight arcs in subtitle
     let series = pub.series || [];
     if(q){
       series = series.filter(s => {
         if((s.name||'').toLowerCase().indexOf(q)>=0) return true;
+        if((s.arcs||[]).some(a => (a.name||'').toLowerCase().indexOf(q)>=0)) return true;
         return (s.books||[]).some(b => ((b.title||'')+' '+(b.filename||'')).toLowerCase().indexOf(q)>=0);
       });
     }
-    if(count) count.textContent = series.length + ' séries';
+    if(countEl) countEl.textContent = series.length + ' séries';
     series.forEach(s => {
-      const nArc = (s.arcs && s.arcs.length) || 0;
-      addCard(s.name, (s.count||0) + ' vols' + (nArc ? (' · ' + nArc + ' arcos') : ''), () => {
-        state.catalogNav = { level: 'arcs', pub: pub, series: s, saga: null, mode: 'series' };
+      const arcs = s.arcs || [];
+      let sub = (s.count||0) + ' vols';
+      if(arcs.length){
+        const names = arcs.slice(0, 3).map(a => a.name).join(' · ');
+        sub += ' · arcos: ' + names + (arcs.length > 3 ? '…' : '');
+      }
+      addCard(s.name, sub, () => {
+        // abre edições da série; se houver arcos, lista agrupada
+        state.catalogNav = { level: 'books', pub: pub, series: s, mode: 'series', order: 'Number' };
         renderJsonCatalog();
       });
     });
     return;
   }
 
-  if(nav.level === 'arcs' && nav.series){
+  // --- books of a series (group by arc lightly) ---
+  if(nav.level === 'books' && nav.mode === 'series' && nav.series){
     const s = nav.series;
     const arcs = s.arcs || [];
-    if(count) count.textContent = (arcs.length) + ' arcos · ' + (s.count||0) + ' vols';
-    // all issues
-    addCard('Todas as edições', (s.count||0) + ' · ordem: Number', () => {
-      state.catalogNav = { level: 'books', pub: pub, series: s, arc: null, mode: 'series', books: s.books, order: 'Number' };
-      renderJsonCatalog();
-    }, '📚');
-    arcs.forEach(a => {
-      addCard(a.name, (a.count||0) + ' eds', () => {
-        state.catalogNav = { level: 'books', pub: pub, series: s, arc: a, mode: 'series', books: a.books, order: 'Number' };
-        renderJsonCatalog();
-      }, '📎');
-    });
-    if(s.booksNoArc && s.booksNoArc.length){
-      addCard('Sem arco', s.booksNoArc.length + ' eds', () => {
-        state.catalogNav = { level: 'books', pub: pub, series: s, mode: 'series', books: s.booksNoArc, order: 'Number' };
-        renderJsonCatalog();
-      }, '•');
+    if(arcs.length){
+      if(countEl) countEl.textContent = (s.count||0) + ' vols · ' + arcs.length + ' arcos';
+      // all
+      const allHead = document.createElement('div');
+      allHead.style.cssText = 'grid-column:1/-1;font-size:12px;color:var(--text-dim);margin-top:4px;';
+      allHead.textContent = 'Toque num arco para filtrar, ou veja todas:';
+      grid.appendChild(allHead);
+      addCard('Todas as edições', (s.count||0) + ' · ordem Number', () => {
+        showBookList(s.books || [], 'Number');
+      }, '📚');
+      arcs.forEach(a => {
+        addCard('Arco: ' + a.name, (a.count||0) + ' eds', () => {
+          showBookList(a.books || [], 'Number');
+        }, '📎');
+      });
+      if(s.booksNoArc && s.booksNoArc.length){
+        addCard('Sem arco marcado', s.booksNoArc.length + ' eds', () => {
+          showBookList(s.booksNoArc, 'Number');
+        }, '•');
+      }
+      // default show all below
+      const sep = document.createElement('div');
+      sep.style.cssText = 'grid-column:1/-1;font-weight:600;margin-top:10px;font-size:13px;';
+      sep.textContent = 'Todas as edições';
+      grid.appendChild(sep);
+      showBookList(s.books || [], 'Number');
+    } else {
+      showBookList(s.books || [], 'Number');
     }
     return;
   }
 
   if(nav.level === 'books'){
-    showBooks(nav.books || [], nav.order || 'Number');
+    showBookList(nav.books || [], nav.order || 'Number');
     return;
   }
 
   if(nav.level === 'sagaBooks' && nav.saga){
     const sg = nav.saga;
-    // optional: series inside saga as cards + full reading order
-    addCard('Ordem de leitura completa', (sg.count||0) + ' · AlternateNumber', () => {
+    if(countEl) countEl.textContent = (sg.count||0) + ' eds na saga';
+    addCard('Ordem de leitura', (sg.count||0) + ' · AlternateNumber', () => {
       state.catalogNav = { level: 'books', pub: pub, saga: sg, mode: 'saga', books: sg.books, order: 'AlternateNumber' };
       renderJsonCatalog();
     }, '📖');
     (sg.series || []).forEach(s => {
-      addCard(s.name, (s.count||0) + ' eds (na saga)', () => {
+      addCard(s.name, (s.count||0) + ' eds (tie-in / na saga)', () => {
         state.catalogNav = { level: 'books', pub: pub, saga: sg, series: s, mode: 'saga', books: s.books, order: 'AlternateNumber' };
         renderJsonCatalog();
       });
     });
+    // show full order by default
+    const sep = document.createElement('div');
+    sep.style.cssText = 'grid-column:1/-1;font-weight:600;margin-top:10px;font-size:13px;';
+    sep.textContent = 'Ordem de leitura (AlternateNumber)';
+    grid.appendChild(sep);
+    showBookList(sg.books || [], 'AlternateNumber');
     return;
   }
 
-  nav.level = 'publishers';
+  state.catalogNav.level = 'publishers';
   renderJsonCatalog();
 }
 
 function showCatalogSeriesDetail(s){
-  // compat: abre nível arcs
   const pub = (state.catalogNav && state.catalogNav.pub) || { name: s.publisherGroup || 'Todas', series: [s], sagas: [] };
-  state.catalogNav = { level: 'arcs', pub: pub, series: s, saga: null, mode: 'series' };
+  state.catalogNav = { level: 'books', pub: pub, series: s, mode: 'series', order: 'Number' };
   renderJsonCatalog();
 }
+
 
 
 async function catalogImportFile(file){
@@ -3447,13 +3467,15 @@ async function catalogImportFile(file){
   toast('Catálogo importado: ' + (data.totalBooks || 0) + ' volumes', 3000);
 }
 
-async function catalogPullFromDrive(){
+async function catalogPullFromDrive(opts){
+  opts = opts || {};
+  const silent = !!opts.silent;
   if(!state.drive || !state.drive.token){
-    toast('Entre no Google Drive primeiro (aba Biblioteca)', 4000);
-    return;
+    if(!silent) toast('Entre no Google Drive primeiro (aba Biblioteca)', 4000);
+    return false;
   }
   try{
-    toastProgress('Buscando catalogo.json no Drive…');
+    if(!silent) toastProgress('Buscando catalogo.json no Drive…');
     const folderId = await driveEnsureFolder();
     const q = encodeURIComponent("name='catalogo.json' and '" + folderId + "' in parents and trashed=false");
     const res = await driveFetch('/drive/v3/files?q=' + q + '&fields=files(id,name,modifiedTime)&pageSize=5');
@@ -3461,21 +3483,41 @@ async function catalogPullFromDrive(){
     if(!res.ok) throw new Error((data.error && data.error.message) || 'erro Drive');
     const f = data.files && data.files[0];
     if(!f){
-      toast('catalogo.json não encontrado na pasta Balao HQ', 4000);
-      return;
+      if(!silent) toast('catalogo.json não encontrado na pasta Balao HQ', 4000);
+      return false;
+    }
+    // skip if same modifiedTime already loaded
+    const prevMeta = await storeGet('catalogo-json-meta');
+    const local = state.jsonCatalog || await storeGet(catalogStoreKey());
+    if(local && prevMeta && prevMeta.modifiedTime === f.modifiedTime && prevMeta.id === f.id){
+      state.jsonCatalog = local;
+      if(!silent) toast('Catálogo já sincronizado', 2000);
+      return true;
     }
     const dl = await driveFetch('/drive/v3/files/' + f.id + '?alt=media');
     if(!dl.ok) throw new Error('Falha ao baixar catalogo.json');
     const json = await dl.json();
-    if(!json.series) throw new Error('JSON sem series[]');
+    if(!json.series && !json.publishers) throw new Error('JSON sem series/publishers');
     await catalogSaveLocal(json);
-    renderJsonCatalog();
-    toast('Catálogo do Drive carregado ✓', 3000);
+    await storeSet('catalogo-json-meta', { id: f.id, modifiedTime: f.modifiedTime, name: f.name });
+    state.catalogNav = { level: 'publishers', pub: null, series: null, saga: null, mode: 'series' };
+    if(state.screen === 'catalog') renderJsonCatalog();
+    if(!silent) toast('Catálogo do Drive atualizado ✓', 3000);
+    return true;
   }catch(e){
     console.error(e);
-    toast('Drive: ' + (e.message || e), 5000);
+    if(!silent) toast('Drive: ' + (e.message || e), 5000);
+    return false;
   }
 }
+
+async function catalogAutoSync(){
+  try{
+    if(!state.drive || !state.drive.token) return;
+    await catalogPullFromDrive({ silent: true });
+  }catch(e){ console.warn('catalog auto sync', e); }
+}
+
 
 
 /* ==================== KOMGA CATÁLOGO ==================== */
@@ -3664,10 +3706,16 @@ function goCatalog(){
   document.querySelectorAll('.nav-tabs button').forEach(b=>{
     b.classList.toggle('on', b.getAttribute('data-tab') === 'catalog');
   });
-  if(state.jsonCatalog){
-    renderJsonCatalog();
-  } else {
-    catalogLoadLocal().then(d=>{ if(d) renderJsonCatalog(); });
+  const paint = ()=>{
+    if(state.jsonCatalog) renderJsonCatalog();
+    else catalogLoadLocal().then(d=>{ if(d) renderJsonCatalog(); });
+  };
+  paint();
+  // sincroniza com Drive em background se logado
+  if(state.drive && state.drive.token){
+    catalogPullFromDrive({ silent: true }).then(ok=>{
+      if(ok) renderJsonCatalog();
+    });
   }
 }
 
@@ -4036,7 +4084,7 @@ document.querySelectorAll('.nav-tabs button').forEach(btn=>{
   }
 })();
 
-driveRestoreToken().then(()=>driveUpdateUi());
+driveRestoreToken().then(()=>{ driveUpdateUi(); catalogAutoSync(); });
 refreshLibrary();
 loadVoices();
 checkStorageAvailable();
