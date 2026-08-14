@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 600" role="img" aria-label="Marvel">
+  <defs>
+    <pattern id="halftone" width="8" height="8" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.2" fill="#000" opacity="0.18"/>
+    </pattern>
+  </defs>
+  <rect width="400" height="600" fill="#8b0000"/>
+  <rect width="400" height="600" fill="url(#halftone)"/>
+  <rect x="40" y="230" width="320" height="110" fill="#fff"/>
+  <text x="200" y="308" text-anchor="middle" font-family="Arial Black, Impact, sans-serif" font-size="64" font-weight="900" fill="#8b0000" letter-spacing="4">MARVEL</text>
+  <text x="200" y="380" text-anchor="middle" font-family="Arial, sans-serif" font-size="22" fill="#ffd0d0" letter-spacing="3">COMICS</text>
+</svg>
