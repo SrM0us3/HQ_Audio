@@ -4569,32 +4569,102 @@ function catalogIndexBooksForOrder(books){
 }
 
 /** Monta lista de livros da saga mesclando ordem CBRO (com placeholders para missing). */
+function catalogIsTpbBook(b){
+  if(!b) return false;
+  const blob = ((b.filename||'') + ' ' + (b.title||'') + ' ' + (b.format||'') + ' ' + (b.series||'')).toLowerCase();
+  if(/\btpb\b/.test(blob) || /trade\s*paperback/.test(blob) || /\bomnibus\b/.test(blob) || /\babsolute\b/.test(blob) && /edition/.test(blob)) return true;
+  // muitos TPBs Blackest Night vêm como uma edição com muitas páginas
+  const pc = parseInt(b.pageCount || b.pages || b.page_count, 10);
+  if(pc && pc >= 120 && /blackest\s*night/i.test(blob) && !/#\s*\d+/.test(b.filename||'')) return true;
+  return false;
+}
 function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
   const key = normSagaName(eventName);
   const order = state.sagaOrders[key];
   if(!order || !Array.isArray(order.issues) || !order.issues.length){
-    return catalogSortBooks(books, orderMode || 'AlternateNumber');
+    // sem ordem CBRO: deduplica por série+# e esconde TPB se já existir a edição avulsa
+    const { byKey } = catalogIndexBooksForOrder(books);
+    const seen = new Set();
+    const deduped = [];
+    catalogSortBooks(books, orderMode || 'AlternateNumber').forEach(b => {
+      if(!b || b._isPlaceholder) return;
+      const k = (normSeriesKey(b.series||'') || normSagaName(b.series||'')) + '|' + catalogNormNum(b.number);
+      if(seen.has(k)) return;
+      // se é TPB e já temos outra chave da mesma saga com número, pode pular
+      if(catalogIsTpbBook(b) && books.some(x => x !== b && !catalogIsTpbBook(x) && normSagaName(x.series) === normSagaName(b.series))){
+        return;
+      }
+      seen.add(k);
+      deduped.push(b);
+    });
+    return deduped.length ? deduped : catalogSortBooks(books, orderMode || 'AlternateNumber');
   }
+
+  // pool: saga + catálogo, mas 1 livro por série+#
   let pool = books.slice();
   try{
     if(typeof catalogAllBooks === 'function' && state.jsonCatalog){
       const all = catalogAllBooks(state.jsonCatalog);
-      const seen = new Set(pool.map(b => (b && (b.id||b.filename||b.stem)) || ''));
+      const seenId = new Set(pool.map(b => (b && (b.id||b.filename||b.stem)) || ''));
       all.forEach(b => {
         const id = (b && (b.id||b.filename||b.stem)) || '';
-        if(id && !seen.has(id)){ seen.add(id); pool.push(b); }
+        if(id && !seenId.has(id)){ seenId.add(id); pool.push(b); }
       });
     }
   }catch(_){}
+
+  // dedupe pool: prefere não-TPB, com thumb, com filename
+  const bestByKey = {};
+  pool.forEach(b => {
+    if(!b || b._isPlaceholder) return;
+    const k = (normSeriesKey(b.series||'') || normSagaName(b.series||'')) + '|' + catalogNormNum(b.number);
+    if(!k || k === '|0' && !b.number && !b.series) return;
+    const prev = bestByKey[k];
+    if(!prev){ bestByKey[k] = b; return; }
+    const score = (x) => {
+      let s = 0;
+      if(!catalogIsTpbBook(x)) s += 5;
+      if(x.thumb) s += 2;
+      if(x.filename) s += 1;
+      if(x.id) s += 1;
+      return s;
+    };
+    if(score(b) > score(prev)) bestByKey[k] = b;
+  });
+  pool = Object.keys(bestByKey).map(k => bestByKey[k]);
+
   const { byId, byKey } = catalogIndexBooksForOrder(pool);
   const out = [];
   const used = new Set();
   order.issues.forEach(iss => {
     let book = catalogMatchIssueToBook(iss, byId, byKey);
+    // se casou com TPB e o issue parece edição avulsa (#n), tenta achar não-TPB
+    if(book && catalogIsTpbBook(book) && iss.number != null && String(iss.number) !== ''){
+      const want = catalogIssueKeys(iss.series, iss.number);
+      for(let i=0;i<want.length;i++){
+        const alt = byKey[want[i]];
+        if(alt && !catalogIsTpbBook(alt)){ book = alt; break; }
+      }
+    }
     if(book){
       const bid = book.id || book.filename || book.stem || '';
+      if(bid && used.has(bid)){
+        // já usado — não duplica; mantém slot? pula slot vazio não — usa o mesmo só uma vez, marca missing se re-match
+        out.push({
+          id: 'dup:' + key + ':' + (iss.order || ''),
+          title: iss.display || iss.raw || ((iss.series||'') + ' #' + (iss.number||'')),
+          series: iss.series || '',
+          number: iss.number || '',
+          alternate_number: String(iss.order != null ? iss.order : ''),
+          series_group: eventName,
+          _sagaOrderStatus: 'missing',
+          _sagaDisplay: iss.display || iss.raw,
+          _isPlaceholder: true
+        });
+        return;
+      }
       if(bid) used.add(bid);
       const copy = Object.assign({}, book);
       copy.alternate_number = String(iss.order != null ? iss.order : (book.alternate_number || ''));
@@ -4619,25 +4689,11 @@ function catalogBuildSagaList(sg, orderMode){
       });
     }
   });
-  // livros da saga que não casaram com nenhum item da ordem (aparecem no celular “completo”)
-  books.forEach(b => {
-    if(!b || b._isPlaceholder) return;
-    const bid = b.id || b.filename || b.stem || '';
-    if(bid && used.has(bid)) return;
-    const sgRaw = String(b.series_group || b.seriesGroup || '');
-    const inSaga = sgRaw.split(',').some(p => normSagaName(p.trim()) === key);
-    if(!inSaga) return;
-    if(bid) used.add(bid);
-    const copy = Object.assign({}, b);
-    copy._sagaOrderStatus = 'extra';
-    out.push(copy);
-  });
+  // NÃO acrescenta "extras" no fim — isso repetia números (1, 46, 47…) e inflava 80 → 85+
   if(orderMode === 'Number'){
     return catalogSortBooks(out, 'Number');
   }
-  const main = out.filter(b => b._sagaOrderStatus !== 'extra');
-  const extra = catalogSortBooks(out.filter(b => b._sagaOrderStatus === 'extra'), 'AlternateNumber');
-  return main.concat(extra);
+  return out;
 }
 
 async function catalogSaveLocal(data){
@@ -5880,7 +5936,24 @@ function renderJsonCatalog(){
         const first = catalogFirstBook(sg.books || [], 'AlternateNumber');
         const cover = catalogCoverSrc(first);
         const y = first && first.year ? (' · ' + first.year) : '';
-        addCard(sg.name, (sg.count||0) + ' eds' + y, () => {
+        // contagem: se há ordem CBRO, usa issues; senão livros únicos
+        let nShow = sg.count || (sg.books||[]).length || 0;
+        try{
+          const k = normSagaName(sg.name||'');
+          const ord = state.sagaOrders && state.sagaOrders[k];
+          if(ord && Array.isArray(ord.issues) && ord.issues.length){
+            nShow = ord.issues.length;
+          } else if(sg.books && sg.books.length){
+            const seen = new Set();
+            sg.books.forEach(b => {
+              if(!b) return;
+              const kk = (normSeriesKey(b.series||'')||'') + '|' + catalogNormNum(b.number);
+              seen.add(kk);
+            });
+            nShow = seen.size || sg.books.length;
+          }
+        }catch(_){}
+        addCard(sg.name, nShow + ' eds' + y, () => {
           state.catalogNav = { level: 'sagaBooks', pub: pub, saga: sg, mode: 'saga', order: 'AlternateNumber' };
           renderJsonCatalog();
         }, '📖', cover);
@@ -6069,7 +6142,7 @@ function renderJsonCatalog(){
     if(countEl){
       countEl.textContent = hasCbro
         ? (list.length + ' na ordem · ' + ownedN + ' tenho · ' + missN + ' faltam')
-        : ((sg.count||0) + ' eds na saga');
+        : (ownedN + ' eds na saga');
     }
     const tog = document.createElement('div');
     tog.className = 'catalog-order-tog';
