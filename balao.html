@@ -4495,13 +4495,61 @@ function catalogIssueKeys(series, number){
   if(sk && sk !== sn) keys.push(sk + '|' + num);
   return keys;
 }
+function catalogIsTpbBook(b){
+  if(!b) return false;
+  const fn = String(b.filename || b.stem || '');
+  const title = String(b.title || '');
+  const series = String(b.series || '');
+  const format = String(b.format || b.binding || '');
+  const blob = (fn + ' ' + title + ' ' + format + ' ' + series).toLowerCase();
+  if(/\btpb\b/.test(blob)) return true;
+  if(/trade\s*paperback/.test(blob)) return true;
+  if(/\bomnibus\b/.test(blob)) return true;
+  if(/\bhc\b/.test(blob) || /\bhardcover\b/.test(blob)) return true;
+  if(/encadernad[oa]/.test(blob)) return true;
+  if(/capa\s*dura/.test(blob)) return true;
+  if(/edi[cç][aã]o\s*definitiva/.test(blob)) return true;
+  if(/\babsolute\b/.test(blob)) return true;
+  if(/\bcompendium\b/.test(blob)) return true;
+  // filename sem #N mas série é evento (TPB “Blackest Night (2010).cbz”)
+  const hasIssueNum = /#\s*\d+/.test(fn) || /#\s*\d+/.test(title);
+  const looksLikeEventCollected = /blackest\s*night|brightest\s*day|infinite\s*crisis|civil\s*war|secret\s*invasion|final\s*crisis|flashpoint/i.test(fn + ' ' + title);
+  if(looksLikeEventCollected && !hasIssueNum){
+    // número de edição 1 genérico em TPB é comum no ComicRack
+    const n = catalogNormNum(b.number);
+    if(!n || n === '1' || n === '0') return true;
+  }
+  const pc = parseInt(b.pageCount || b.pages || b.page_count, 10);
+  if(pc && pc >= 100 && !hasIssueNum) return true;
+  if(pc && pc >= 150) return true;
+  return false;
+}
+function catalogPreferBook(a, b){
+  // retorna o melhor entre a e b (não-TPB > com # no nome > com thumb)
+  if(!a) return b;
+  if(!b) return a;
+  const score = (x) => {
+    let s = 0;
+    if(!catalogIsTpbBook(x)) s += 20;
+    const fn = String(x.filename||x.stem||'');
+    if(/#\s*\d+/.test(fn)) s += 8;
+    if(x.thumb) s += 2;
+    if(x.filename) s += 1;
+    const pc = parseInt(x.pageCount || x.pages || 0, 10);
+    if(pc && pc > 0 && pc < 80) s += 3; // edição avulsa típica
+    if(pc && pc >= 100) s -= 5;
+    return s;
+  };
+  return score(a) >= score(b) ? a : b;
+}
 function catalogMatchIssueToBook(iss, byId, byKey){
   if(!iss) return null;
-  if(iss.bookId && byId[iss.bookId]) return byId[iss.bookId];
-  if(iss.matched_to){
+  let found = null;
+  if(iss.bookId && byId[iss.bookId]) found = byId[iss.bookId];
+  if(!found && iss.matched_to){
     const m = iss.matched_to;
-    if(m.bookId && byId[m.bookId]) return byId[m.bookId];
-    if(m.id && byId[m.id]) return byId[m.id];
+    if(m.bookId && byId[m.bookId]) found = byId[m.bookId];
+    else if(m.id && byId[m.id]) found = byId[m.id];
   }
   const candidates = [];
   catalogIssueKeys(iss.series, iss.number).forEach(k => candidates.push(k));
@@ -4511,16 +4559,11 @@ function catalogMatchIssueToBook(iss, byId, byKey){
     let mt = disp.match(/^(.+?)\s+#\s*(\d+(?:\.\d+)?)\b/);
     if(!mt) mt = disp.match(/^(.+?)\s+#?(\d+(?:\.\d+)?)\s*(?:\(|$)/);
     if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(k => candidates.push(k));
-    mt = disp.match(/vol(?:ume)?\.?\s*\d+\s*#\s*(\d+(?:\.\d+)?)/i);
-    if(mt){
-      const seriesGuess = disp.replace(/\s*vol(?:ume)?\.?\s*\d+.*$/i, '').trim();
-      catalogIssueKeys(seriesGuess, mt[1]).forEach(k => candidates.push(k));
-    }
   }
   for(let i=0;i<candidates.length;i++){
-    if(byKey[candidates[i]]) return byKey[candidates[i]];
+    if(byKey[candidates[i]]) found = catalogPreferBook(found, byKey[candidates[i]]);
   }
-  // fuzzy: mesmo número + série contida (The Phantom Stranger ≈ Phantom Stranger)
+  // fuzzy
   const num = catalogNormNum(iss.number != null ? iss.number : (disp.match(/#\s*(\d+)/)||[])[1]);
   const skeys = [normSeriesKey(iss.series||''), normSeriesKey(iss.series_name||''), normSeriesKey(disp.split('#')[0]||'')].filter(Boolean);
   if(num && skeys.length){
@@ -4533,19 +4576,41 @@ function catalogMatchIssueToBook(iss, byId, byKey){
       for(let j=0;j<skeys.length;j++){
         const sk = skeys[j];
         if(!sk || sk.length < 4) continue;
-        if(bs === sk || bs.indexOf(sk) >= 0 || sk.indexOf(bs) >= 0) return byKey[k];
+        if(bs === sk || bs.indexOf(sk) >= 0 || sk.indexOf(bs) >= 0){
+          found = catalogPreferBook(found, byKey[k]);
+        }
       }
     }
   }
-  if(iss.display){
-    const fk = 'file:' + normSagaName(iss.display);
-    if(byKey[fk]) return byKey[fk];
+  // se só achou TPB, tenta achar avulsa com mesmo series|#
+  if(found && catalogIsTpbBook(found)){
+    let better = null;
+    candidates.forEach(k => {
+      // byKey guarda o preferido, mas varremos byId values
+    });
+    Object.keys(byId).forEach(id => {
+      const b = byId[id];
+      if(!b || catalogIsTpbBook(b)) return;
+      const keys = catalogIssueKeys(b.series, b.number);
+      const hit = candidates.some(c => keys.indexOf(c) >= 0);
+      if(hit) better = catalogPreferBook(better, b);
+      // fuzzy series
+      if(num && skeys.some(sk => {
+        const bs = normSeriesKey(b.series||'');
+        return bs && sk && (bs === sk || bs.indexOf(sk)>=0 || sk.indexOf(bs)>=0) && catalogNormNum(b.number) === String(num);
+      })) better = catalogPreferBook(better, b);
+    });
+    if(better) found = better;
   }
-  if(iss.raw){
-    const fk = 'file:' + normSagaName(iss.raw);
-    if(byKey[fk]) return byKey[fk];
+  // Nunca usar TPB para item numerado da ordem (ex. Blackest Night #1)
+  if(found && catalogIsTpbBook(found) && iss.number != null && String(iss.number).trim() !== ''){
+    // só aceita TPB se o próprio display da ordem indicar collected/tpb
+    const dlow = disp.toLowerCase();
+    if(!/\btpb\b/.test(dlow) && !/omnibus/.test(dlow) && !/encadernad/.test(dlow)){
+      return null; // melhor “faltando” do que TPB no lugar errado
+    }
   }
-  return null;
+  return found;
 }
 function catalogIndexBooksForOrder(books){
   const byId = {};
@@ -4556,28 +4621,22 @@ function catalogIndexBooksForOrder(books){
       ? catalogBookOverrideId(b) : (b.id || b.filename || b.stem);
     if(id) byId[id] = b;
     if(b.id) byId[b.id] = b;
-    catalogIssueKeys(b.series, b.number).forEach(k => { byKey[k] = b; });
-    if(b.title) catalogIssueKeys(b.title, b.number).forEach(k => { byKey[k] = b; });
+    const put = (k) => {
+      if(!k) return;
+      byKey[k] = catalogPreferBook(byKey[k], b);
+    };
+    catalogIssueKeys(b.series, b.number).forEach(put);
+    if(b.title) catalogIssueKeys(b.title, b.number).forEach(put);
     const fn = String(b.filename || b.stem || '').replace(/\.cbz$/i,'');
     if(fn){
-      byKey['file:' + normSagaName(fn)] = b;
+      put('file:' + normSagaName(fn));
       const mt = fn.match(/^(.+?)\s+#(\d+)/) || fn.match(/^(.+?)\s+(\d{1,4})\s*(?:\(|$)/);
-      if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(k => { byKey[k] = b; });
+      if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(put);
     }
   });
   return { byId, byKey };
 }
 
-/** Monta lista de livros da saga mesclando ordem CBRO (com placeholders para missing). */
-function catalogIsTpbBook(b){
-  if(!b) return false;
-  const blob = ((b.filename||'') + ' ' + (b.title||'') + ' ' + (b.format||'') + ' ' + (b.series||'')).toLowerCase();
-  if(/\btpb\b/.test(blob) || /trade\s*paperback/.test(blob) || /\bomnibus\b/.test(blob) || /\babsolute\b/.test(blob) && /edition/.test(blob)) return true;
-  // muitos TPBs Blackest Night vêm como uma edição com muitas páginas
-  const pc = parseInt(b.pageCount || b.pages || b.page_count, 10);
-  if(pc && pc >= 120 && /blackest\s*night/i.test(blob) && !/#\s*\d+/.test(b.filename||'')) return true;
-  return false;
-}
 function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
