@@ -807,7 +807,7 @@ window.addEventListener('unhandledrejection', function(ev){
       html += '<button type="button" id="setFbLogin" style="padding:12px;border-radius:10px;border:none;background:#e4402c;color:#fff;font-weight:600">Entrar no Firebase (Google)</button>';
       html += '<button type="button" id="setFbLogout" style="padding:12px;border-radius:10px;border:1px solid #444;background:transparent;color:#aaa;display:none">Sair do Firebase</button>';
       html += '<button type="button" id="setFbRefresh" style="padding:10px;border-radius:10px;border:1px solid #333;background:#2a2d38;color:#f2f2f2">Atualizar status Firebase</button>';
-      html += '<button type="button" id="setFbSyncOrders" style="padding:12px;border-radius:10px;border:none;background:#2a6;color:#fff;font-weight:600">Sincronizar ordens de saga agora</button>';
+      html += '<button type="button" id="setFbSyncOrders" onclick="try{window.__fbSyncSaga&&window.__fbSyncSaga()}catch(e){alert(e)}" style="padding:12px;border-radius:10px;border:none;background:#2a6;color:#fff;font-weight:600">Sincronizar ordens de saga agora</button>';
       html += '</div>';
       html += '<div style="font-size:11px;color:#888;margin-bottom:8px">No celular use o Chrome (não abra pelo WhatsApp). Se não conectar, toque de novo após atualizar o app.</div>';
       html += '<div style="margin-top:8px;font-size:13px;font-weight:600">Google Drive (catálogo e capas)</div>';
@@ -1495,22 +1495,64 @@ async function fbPullSagaOrders(opts){
 }
 /** Sincroniza ordens + catálogo Drive (botão manual) */
 async function fbSyncSagaAndCatalog(){
-  if(!state.fb || !state.fb.user){
-    toast('Entre no Firebase primeiro', 3000);
+  try{
+    alert('Iniciando sincronização…');
+  }catch(_){}
+  try{ toast('Sincronizando ordens de saga…', 3000); }catch(_){}
+
+  if(typeof firebase === 'undefined'){
+    alert('Firebase SDK não carregou. Verifique se o Brave/Herond não está bloqueando scripts (Escudos).');
     return;
   }
-  toastProgress('Sincronizando ordens e catálogo…');
+  if(!state.fb || !state.fb.ready){
+    try{ fbInit(); }catch(e){ alert('fbInit: ' + e); return; }
+  }
+  // atualiza user a partir do auth
+  try{
+    if(state.fb.auth && state.fb.auth.currentUser){
+      state.fb.user = state.fb.auth.currentUser;
+    }
+  }catch(_){}
+
+  if(!state.fb.user){
+    alert('Firebase desconectado neste navegador.\n\n1) Toque em “Entrar no Firebase (Google)”\n2) Autorize a conta\n3) Toque de novo em sincronizar.\n\nNo Brave: Escudos → permitir cookies/scripts para este site.');
+    return;
+  }
+
+  try{ toastProgress('Sincronizando ordens e catálogo…'); }catch(_){}
   try{
     if(state.drive && state.drive.token && typeof catalogPullFromDrive === 'function'){
-      await catalogPullFromDrive({ silent: true });
+      try{
+        toast('Baixando catálogo do Drive…', 2500);
+        await catalogPullFromDrive({ silent: true });
+      }catch(e){
+        console.warn('catalog pull', e);
+        toast('Drive: ' + (e.message||e) + ' — continuando só com ordens…', 4000);
+      }
+    } else {
+      toast('Drive não conectado — só ordens Firebase', 3000);
     }
-    await fbPullSagaOrders({ force: true, verbose: true });
+
+    if(typeof fbPullSagaOrders !== 'function'){
+      alert('Função fbPullSagaOrders ausente — app desatualizado? Limpe o cache e recarregue.');
+      return;
+    }
+    const ok = await fbPullSagaOrders({ force: true, verbose: true });
+    const nOrd = Object.keys(state.sagaOrders || {}).length;
+    const names = Object.keys(state.sagaOrdersMeta || {}).map(k => (state.sagaOrdersMeta[k].event || k));
+    const msg = ok
+      ? ('Sync OK\nOrdens: ' + (names.join(', ') || nOrd) + '\nAbra a saga de novo.')
+      : ('Sync terminou.\nOrdens locais: ' + nOrd + (names.length ? ('\n' + names.join(', ')) : '') + '\nSe vazio, importe no PC de novo com Firebase ligado.');
+    try{ alert(msg); }catch(_){}
+    try{ toast(msg.replace(/\n/g, ' · '), 6000); }catch(_){}
     if(typeof renderJsonCatalog === 'function') renderJsonCatalog();
   }catch(e){
     console.error(e);
-    toast('Sync: ' + (e.message || e), 5000);
+    alert('Erro ao sincronizar: ' + (e && e.message ? e.message : e));
+    try{ toast('Sync: ' + (e.message || e), 5000); }catch(_){}
   }
 }
+window.__fbSyncSaga = function(){ fbSyncSagaAndCatalog(); };
 
 let _fbPushTimer = null;
 function scheduleFbProgressPush(){
