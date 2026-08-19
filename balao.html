@@ -1099,6 +1099,7 @@ function fbInit(){
           fbUpdateUi();
           if(user){
             try{ await fbPullAllOverrides(); }catch(e){ console.warn(e); }
+            try{ await fbPullSagaOrders(); }catch(e){ console.warn(e); }
             try{ await fbPullProgressIndex(); }catch(e){ console.warn(e); }
             if(typeof renderJsonCatalog === 'function' && state.screen === 'catalog'){
               try{ renderJsonCatalog(); }catch(_){}
@@ -1420,6 +1421,45 @@ async function fbPullAllOverrides(){
       await catalogApplyOverrides(state.jsonCatalog);
     }
   }
+}
+async function fbSaveSagaOrders(){
+  const root = fbUserPath();
+  if(!root) return false;
+  const payload = {
+    orders: state.sagaOrders || {},
+    meta: state.sagaOrdersMeta || {},
+    savedAt: Date.now(),
+    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+  };
+  await root.collection('meta').doc('sagaOrders').set(payload, { merge: true });
+  return true;
+}
+async function fbPullSagaOrders(){
+  const root = fbUserPath();
+  if(!root) return false;
+  const snap = await root.collection('meta').doc('sagaOrders').get();
+  if(!snap.exists) return false;
+  const d = snap.data() || {};
+  const remoteAt = d.savedAt || 0;
+  const remoteOrders = d.orders || {};
+  const remoteMeta = d.meta || {};
+  let changed = false;
+  Object.keys(remoteOrders).forEach(k => {
+    const rAt = (remoteMeta[k] && remoteMeta[k].importedAt) || remoteAt || 0;
+    const lAt = (state.sagaOrdersMeta[k] && state.sagaOrdersMeta[k].importedAt) || 0;
+    if(!state.sagaOrders[k] || rAt >= lAt){
+      state.sagaOrders[k] = remoteOrders[k];
+      state.sagaOrdersMeta[k] = remoteMeta[k] || { event: k, importedAt: rAt };
+      changed = true;
+    }
+  });
+  if(changed){
+    try{ await sagaOrdersSaveLocal(); }catch(_){}
+    if(typeof renderJsonCatalog === 'function' && state.screen === 'catalog'){
+      try{ renderJsonCatalog(); }catch(_){}
+    }
+  }
+  return changed;
 }
 
 let _fbPushTimer = null;
@@ -4258,6 +4298,14 @@ function sagaOrdersStoreKey(){ return 'saga-orders-map'; }
 function normSagaName(s){
   return String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').replace(/\s+/g,' ').trim();
 }
+function normSeriesKey(s){
+  let t = normSagaName(s);
+  t = t.replace(/^the\s+/, '');
+  t = t.replace(/\bvol(?:ume)?\s*\d+\b/g, ' ');
+  t = t.replace(/\bv\d+\b/g, ' ');
+  return t.replace(/\s+/g, ' ').trim();
+}
+
 
 async function sagaOrdersLoadLocal(){
   try{
@@ -4298,6 +4346,7 @@ function sagaOrdersImportFile(file){
           fileName: file && file.name
         };
         await sagaOrdersSaveLocal();
+        try{ if(state.fb && state.fb.user) await fbSaveSagaOrders(); }catch(e){ console.warn(e); }
         // Aplica no catalogo.json em memória + overrides + Drive
         let applied = 0;
         try{
@@ -4437,19 +4486,15 @@ function catalogNormNum(n){
   }
   return s.replace(/^0+/, '') || '0';
 }
-function catalogIssueKeys(series, number, extra){
+function catalogIssueKeys(series, number){
   const keys = [];
   const sn = normSagaName(series || '');
+  const sk = (typeof normSeriesKey === 'function') ? normSeriesKey(series || '') : sn;
   const num = catalogNormNum(number);
   if(sn) keys.push(sn + '|' + num);
-  // sem volume na chave principal
-  if(extra){
-    const en = normSagaName(extra);
-    if(en) keys.push(en + '|' + num);
-  }
+  if(sk && sk !== sn) keys.push(sk + '|' + num);
   return keys;
 }
-/** Tenta achar livro no mapa por issue da ordem CBRO */
 function catalogMatchIssueToBook(iss, byId, byKey){
   if(!iss) return null;
   if(iss.bookId && byId[iss.bookId]) return byId[iss.bookId];
@@ -4458,19 +4503,40 @@ function catalogMatchIssueToBook(iss, byId, byKey){
     if(m.bookId && byId[m.bookId]) return byId[m.bookId];
     if(m.id && byId[m.id]) return byId[m.id];
   }
-  // series + number (várias formas)
   const candidates = [];
   catalogIssueKeys(iss.series, iss.number).forEach(k => candidates.push(k));
   if(iss.series_name) catalogIssueKeys(iss.series_name, iss.number).forEach(k => candidates.push(k));
-  if(iss.display){
-    // tenta extrair "Series #N" do display
-    const mt = String(iss.display).match(/^(.+?)\s+#?(\d+\.?\d*)\s*(?:\(|$)/);
+  const disp = String(iss.display || iss.raw || '');
+  if(disp){
+    let mt = disp.match(/^(.+?)\s+#\s*(\d+(?:\.\d+)?)\b/);
+    if(!mt) mt = disp.match(/^(.+?)\s+#?(\d+(?:\.\d+)?)\s*(?:\(|$)/);
     if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(k => candidates.push(k));
+    mt = disp.match(/vol(?:ume)?\.?\s*\d+\s*#\s*(\d+(?:\.\d+)?)/i);
+    if(mt){
+      const seriesGuess = disp.replace(/\s*vol(?:ume)?\.?\s*\d+.*$/i, '').trim();
+      catalogIssueKeys(seriesGuess, mt[1]).forEach(k => candidates.push(k));
+    }
   }
   for(let i=0;i<candidates.length;i++){
     if(byKey[candidates[i]]) return byKey[candidates[i]];
   }
-  // filename / display como última tentativa
+  // fuzzy: mesmo número + série contida (The Phantom Stranger ≈ Phantom Stranger)
+  const num = catalogNormNum(iss.number != null ? iss.number : (disp.match(/#\s*(\d+)/)||[])[1]);
+  const skeys = [normSeriesKey(iss.series||''), normSeriesKey(iss.series_name||''), normSeriesKey(disp.split('#')[0]||'')].filter(Boolean);
+  if(num && skeys.length){
+    for(const k in byKey){
+      if(!k || k.indexOf('|') < 0 || k.indexOf('file:') === 0) continue;
+      const sp = k.lastIndexOf('|');
+      const bs = k.slice(0, sp);
+      const bn = k.slice(sp+1);
+      if(bn !== String(num)) continue;
+      for(let j=0;j<skeys.length;j++){
+        const sk = skeys[j];
+        if(!sk || sk.length < 4) continue;
+        if(bs === sk || bs.indexOf(sk) >= 0 || sk.indexOf(bs) >= 0) return byKey[k];
+      }
+    }
+  }
   if(iss.display){
     const fk = 'file:' + normSagaName(iss.display);
     if(byKey[fk]) return byKey[fk];
@@ -4491,10 +4557,13 @@ function catalogIndexBooksForOrder(books){
     if(id) byId[id] = b;
     if(b.id) byId[b.id] = b;
     catalogIssueKeys(b.series, b.number).forEach(k => { byKey[k] = b; });
-    // também pelo title se parecer "Series #n"
     if(b.title) catalogIssueKeys(b.title, b.number).forEach(k => { byKey[k] = b; });
     const fn = String(b.filename || b.stem || '').replace(/\.cbz$/i,'');
-    if(fn) byKey['file:' + normSagaName(fn)] = b;
+    if(fn){
+      byKey['file:' + normSagaName(fn)] = b;
+      const mt = fn.match(/^(.+?)\s+#(\d+)/) || fn.match(/^(.+?)\s+(\d{1,4})\s*(?:\(|$)/);
+      if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(k => { byKey[k] = b; });
+    }
   });
   return { byId, byKey };
 }
@@ -4508,14 +4577,13 @@ function catalogBuildSagaList(sg, orderMode){
   if(!order || !Array.isArray(order.issues) || !order.issues.length){
     return catalogSortBooks(books, orderMode || 'AlternateNumber');
   }
-  // índice: livros desta saga + TODO o catálogo (match mais amplo)
   let pool = books.slice();
   try{
     if(typeof catalogAllBooks === 'function' && state.jsonCatalog){
       const all = catalogAllBooks(state.jsonCatalog);
-      const seen = new Set(pool.map(b => (b && (b.id||b.filename)) || ''));
+      const seen = new Set(pool.map(b => (b && (b.id||b.filename||b.stem)) || ''));
       all.forEach(b => {
-        const id = (b && (b.id||b.filename)) || '';
+        const id = (b && (b.id||b.filename||b.stem)) || '';
         if(id && !seen.has(id)){ seen.add(id); pool.push(b); }
       });
     }
@@ -4526,11 +4594,10 @@ function catalogBuildSagaList(sg, orderMode){
   order.issues.forEach(iss => {
     let book = catalogMatchIssueToBook(iss, byId, byKey);
     if(book){
-      const bid = book.id || book.filename || '';
+      const bid = book.id || book.filename || book.stem || '';
       if(bid) used.add(bid);
       const copy = Object.assign({}, book);
       copy.alternate_number = String(iss.order != null ? iss.order : (book.alternate_number || ''));
-      copy.series_group = book.series_group || eventName;
       copy._sagaOrderStatus = 'found';
       copy._sagaDisplay = iss.display || iss.raw;
       out.push(copy);
@@ -4552,10 +4619,25 @@ function catalogBuildSagaList(sg, orderMode){
       });
     }
   });
+  // livros da saga que não casaram com nenhum item da ordem (aparecem no celular “completo”)
+  books.forEach(b => {
+    if(!b || b._isPlaceholder) return;
+    const bid = b.id || b.filename || b.stem || '';
+    if(bid && used.has(bid)) return;
+    const sgRaw = String(b.series_group || b.seriesGroup || '');
+    const inSaga = sgRaw.split(',').some(p => normSagaName(p.trim()) === key);
+    if(!inSaga) return;
+    if(bid) used.add(bid);
+    const copy = Object.assign({}, b);
+    copy._sagaOrderStatus = 'extra';
+    out.push(copy);
+  });
   if(orderMode === 'Number'){
     return catalogSortBooks(out, 'Number');
   }
-  return out;
+  const main = out.filter(b => b._sagaOrderStatus !== 'extra');
+  const extra = catalogSortBooks(out.filter(b => b._sagaOrderStatus === 'extra'), 'AlternateNumber');
+  return main.concat(extra);
 }
 
 async function catalogSaveLocal(data){
