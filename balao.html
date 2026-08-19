@@ -807,6 +807,7 @@ window.addEventListener('unhandledrejection', function(ev){
       html += '<button type="button" id="setFbLogin" style="padding:12px;border-radius:10px;border:none;background:#e4402c;color:#fff;font-weight:600">Entrar no Firebase (Google)</button>';
       html += '<button type="button" id="setFbLogout" style="padding:12px;border-radius:10px;border:1px solid #444;background:transparent;color:#aaa;display:none">Sair do Firebase</button>';
       html += '<button type="button" id="setFbRefresh" style="padding:10px;border-radius:10px;border:1px solid #333;background:#2a2d38;color:#f2f2f2">Atualizar status Firebase</button>';
+      html += '<button type="button" id="setFbSyncOrders" style="padding:12px;border-radius:10px;border:none;background:#2a6;color:#fff;font-weight:600">Sincronizar ordens de saga agora</button>';
       html += '</div>';
       html += '<div style="font-size:11px;color:#888;margin-bottom:8px">No celular use o Chrome (não abra pelo WhatsApp). Se não conectar, toque de novo após atualizar o app.</div>';
       html += '<div style="margin-top:8px;font-size:13px;font-weight:600">Google Drive (catálogo e capas)</div>';
@@ -917,6 +918,10 @@ window.addEventListener('unhandledrejection', function(ev){
         var u = state.fb && state.fb.user;
         if(typeof toast === 'function') toast(u ? ('Conectado: ' + (u.email||u.uid)) : 'Ainda desconectado', 3000);
       }catch(e){ alert(e); }
+    });
+    click('setFbSyncOrders', function(){
+      if(typeof fbSyncSagaAndCatalog === 'function') fbSyncSagaAndCatalog();
+      else alert('Função ainda carregando…');
     });
     click('setDriveLogin', function(){
       if(typeof driveLogin === 'function') driveLogin();
@@ -1099,7 +1104,7 @@ function fbInit(){
           fbUpdateUi();
           if(user){
             try{ await fbPullAllOverrides(); }catch(e){ console.warn(e); }
-            try{ await fbPullSagaOrders(); }catch(e){ console.warn(e); }
+            try{ await fbPullSagaOrders({ force: true }); }catch(e){ console.warn(e); }
             try{ await fbPullProgressIndex(); }catch(e){ console.warn(e); }
             if(typeof renderJsonCatalog === 'function' && state.screen === 'catalog'){
               try{ renderJsonCatalog(); }catch(_){}
@@ -1431,35 +1436,80 @@ async function fbSaveSagaOrders(){
     savedAt: Date.now(),
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  await root.collection('meta').doc('sagaOrders').set(payload, { merge: true });
+  // set completo (não merge parcial de orders) para o outro aparelho receber a mesma foto
+  await root.collection('meta').doc('sagaOrders').set(payload);
   return true;
 }
-async function fbPullSagaOrders(){
+async function fbPullSagaOrders(opts){
+  opts = opts || {};
   const root = fbUserPath();
   if(!root) return false;
   const snap = await root.collection('meta').doc('sagaOrders').get();
-  if(!snap.exists) return false;
+  if(!snap.exists){
+    if(opts.verbose) toast('Nenhuma ordem de saga no Firebase ainda', 3000);
+    return false;
+  }
   const d = snap.data() || {};
   const remoteAt = d.savedAt || 0;
   const remoteOrders = d.orders || {};
   const remoteMeta = d.meta || {};
-  let changed = false;
-  Object.keys(remoteOrders).forEach(k => {
-    const rAt = (remoteMeta[k] && remoteMeta[k].importedAt) || remoteAt || 0;
-    const lAt = (state.sagaOrdersMeta[k] && state.sagaOrdersMeta[k].importedAt) || 0;
-    if(!state.sagaOrders[k] || rAt >= lAt){
-      state.sagaOrders[k] = remoteOrders[k];
-      state.sagaOrdersMeta[k] = remoteMeta[k] || { event: k, importedAt: rAt };
-      changed = true;
-    }
+  // max importedAt local
+  let localMax = 0;
+  Object.keys(state.sagaOrdersMeta || {}).forEach(k => {
+    const t = (state.sagaOrdersMeta[k] && state.sagaOrdersMeta[k].importedAt) || 0;
+    if(t > localMax) localMax = t;
   });
-  if(changed){
-    try{ await sagaOrdersSaveLocal(); }catch(_){}
-    if(typeof renderJsonCatalog === 'function' && state.screen === 'catalog'){
-      try{ renderJsonCatalog(); }catch(_){}
+  const localSaved = (await storeGet('saga-orders-savedAt')) || 0;
+  if(!opts.force && remoteAt && localSaved && remoteAt <= localSaved && Object.keys(state.sagaOrders||{}).length){
+    if(opts.verbose) toast('Ordens de saga já sincronizadas', 2500);
+    return false;
+  }
+  // substitui pelas ordens remotas (fonte da verdade = último save no Firebase)
+  state.sagaOrders = remoteOrders;
+  state.sagaOrdersMeta = remoteMeta;
+  await sagaOrdersSaveLocal();
+  try{ await storeSet('saga-orders-savedAt', remoteAt || Date.now()); }catch(_){}
+
+  // Reaplica no catálogo local (series_group + alternate_number)
+  let totalApplied = 0;
+  const names = [];
+  if(state.jsonCatalog && typeof catalogApplySagaOrderToCatalog === 'function'){
+    for(const k of Object.keys(remoteOrders)){
+      const order = remoteOrders[k];
+      if(!order || !order.event) continue;
+      try{
+        const n = await catalogApplySagaOrderToCatalog(order, { skipDrive: true, silent: true });
+        totalApplied += (n || 0);
+        names.push(order.event);
+      }catch(e){ console.warn('reapply order', e); }
     }
   }
-  return changed;
+  if(typeof renderJsonCatalog === 'function' && state.screen === 'catalog'){
+    try{ renderJsonCatalog(); }catch(_){}
+  }
+  if(opts.verbose || totalApplied || names.length){
+    toast('Ordens Firebase: ' + (names.length ? names.join(', ') : 'ok') +
+      (totalApplied ? (' · ' + totalApplied + ' eds no catálogo') : ''), 5000);
+  }
+  return true;
+}
+/** Sincroniza ordens + catálogo Drive (botão manual) */
+async function fbSyncSagaAndCatalog(){
+  if(!state.fb || !state.fb.user){
+    toast('Entre no Firebase primeiro', 3000);
+    return;
+  }
+  toastProgress('Sincronizando ordens e catálogo…');
+  try{
+    if(state.drive && state.drive.token && typeof catalogPullFromDrive === 'function'){
+      await catalogPullFromDrive({ silent: true });
+    }
+    await fbPullSagaOrders({ force: true, verbose: true });
+    if(typeof renderJsonCatalog === 'function') renderJsonCatalog();
+  }catch(e){
+    console.error(e);
+    toast('Sync: ' + (e.message || e), 5000);
+  }
 }
 
 let _fbPushTimer = null;
@@ -4346,6 +4396,7 @@ function sagaOrdersImportFile(file){
           fileName: file && file.name
         };
         await sagaOrdersSaveLocal();
+        try{ await storeSet('saga-orders-savedAt', Date.now()); }catch(_){}
         try{ if(state.fb && state.fb.user) await fbSaveSagaOrders(); }catch(e){ console.warn(e); }
         // Aplica no catalogo.json em memória + overrides + Drive
         let applied = 0;
@@ -4385,13 +4436,14 @@ function sagaOrdersImportFile(file){
  * Grava series_group + alternate_number nas edições encontradas do catálogo
  * e envia catalogo.json ao Drive (se conectado).
  */
-async function catalogApplySagaOrderToCatalog(order){
+async function catalogApplySagaOrderToCatalog(order, opts){
+  opts = opts || {};
   if(!order || !order.event || !Array.isArray(order.issues)) return 0;
   if(!state.jsonCatalog){
     try{ await catalogLoadLocal(); }catch(_){}
   }
   if(!state.jsonCatalog){
-    toast('Catálogo não carregado — importe o catalogo.json antes da ordem', 5000);
+    if(!opts.silent) toast('Catálogo não carregado — importe o catalogo.json antes da ordem', 5000);
     return 0;
   }
   const eventName = order.event;
@@ -4458,17 +4510,21 @@ async function catalogApplySagaOrderToCatalog(order){
     }catch(e){ console.warn('fb saga apply', e); }
   }
 
-  // Drive: sobe catalogo.json atualizado
-  if(state.drive && state.drive.token && typeof catalogPushToDrive === 'function'){
-    try{
-      toastProgress('Enviando catálogo atualizado ao Drive…');
-      await catalogPushToDrive();
-    }catch(e){
-      console.warn(e);
-      toast('Catálogo atualizado localmente; Drive falhou: ' + (e.message||e), 5000);
+  // Drive: sobe catalogo.json atualizado (exceto quando vem do pull Firebase)
+  if(!opts.skipDrive){
+    if(state.drive && state.drive.token && typeof catalogPushToDrive === 'function'){
+      try{
+        if(!opts.silent) toastProgress('Enviando catálogo atualizado ao Drive…');
+        await catalogPushToDrive();
+      }catch(e){
+        console.warn(e);
+        if(!opts.silent) toast('Catálogo atualizado localmente; Drive falhou: ' + (e.message||e), 5000);
+      }
+    } else if(!opts.silent){
+      toast('Catálogo atualizado neste aparelho. Conecte o Drive e use “Enviar catálogo” para os outros.', 5000);
     }
   } else {
-    toast('Catálogo atualizado neste aparelho. Conecte o Drive e use “Enviar catálogo” para os outros.', 5000);
+    try{ await catalogSaveLocal(state.jsonCatalog); }catch(_){}
   }
   return applied;
 }
