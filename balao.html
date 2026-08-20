@@ -4557,17 +4557,16 @@ function catalogSeriesLooseEqual(a, b){
 function catalogIssueKeysExpanded(series, number){
   const keys = catalogIssueKeys(series, number);
   const raw = String(series || '');
-  const variants = [raw];
-  // Brightest Day Aftermath: The Search → também "… The Search for Swamp Thing" será batido pelo loose equal;
-  // aqui geramos prefixos: antes de ":", e "… Aftermath"
-  if(raw.indexOf(':') >= 0){
-    variants.push(raw.split(':')[0]);
-    variants.push(raw.replace(/:.*$/, '').trim());
+  const variants = [];
+  // underscore → espaço
+  if(raw.indexOf('_') >= 0) variants.push(raw.replace(/_/g, ' '));
+  // "Search for Swamp Thing" → base só se já for nome longo (3+ tokens)
+  const noFor = raw.replace(/\s+for\s+.+$/i, '').trim();
+  if(noFor && noFor !== raw){
+    const baseWords = normSeriesKey(noFor).split(' ').filter(Boolean);
+    if(baseWords.length >= 3) variants.push(noFor);
   }
-  // remove "for X" no fim (Search for Swamp Thing → Search)
-  variants.push(raw.replace(/\s+for\s+.+$/i, '').trim());
-  // underscore como espaço
-  variants.push(raw.replace(/_/g, ' '));
+  // NÃO colapsar "Flashpoint: Reverse Flash" → "Flashpoint" (roubava #1 da principal)
   variants.forEach(v => {
     if(!v) return;
     catalogIssueKeys(v, number).forEach(k => {
@@ -4902,9 +4901,13 @@ function catalogMatchIssueToBook(iss, byId, byKey){
       const b = byId[id];
       if(!b || catalogIsTpbBook(b)) return;
       if(catalogNormNum(b.number) !== String(num)) return;
-      if(seriesCands.some(sc => catalogSeriesLooseEqual(sc, b.series||'') || catalogSeriesLooseEqual(sc, b.title||''))){
-        found = catalogPreferBook(found, b);
-      }
+      const ok = seriesCands.some(sc => {
+        const sk = normSeriesKey(sc);
+        const bk = normSeriesKey(b.series || '');
+        if(sk.split(' ').filter(Boolean).length <= 1) return sk === bk;
+        return catalogSeriesLooseEqual(sc, b.series||'') || catalogSeriesLooseEqual(sc, b.title||'');
+      });
+      if(ok) found = catalogPreferBook(found, b);
     });
   }
   // se só achou TPB, tenta achar avulsa com mesmo series|#
@@ -4946,13 +4949,24 @@ function catalogIndexBooksForOrder(books){
       ? catalogBookOverrideId(b) : (b.id || b.filename || b.stem);
     if(id) byId[id] = b;
     if(b.id) byId[b.id] = b;
-    const put = (k) => {
+    const put = (k, exactSeries) => {
       if(!k) return;
-      byKey[k] = catalogPreferBook(byKey[k], b);
+      const prev = byKey[k];
+      if(!prev){ byKey[k] = b; return; }
+      if(exactSeries){
+        const sp = k.lastIndexOf('|');
+        const sk = sp >= 0 ? k.slice(0, sp) : '';
+        const prevSk = normSeriesKey(prev.series || '');
+        const curSk = normSeriesKey(b.series || '');
+        if(sk && curSk === sk && prevSk !== sk){ byKey[k] = b; return; }
+        if(sk && prevSk === sk && curSk !== sk) return;
+      }
+      byKey[k] = catalogPreferBook(prev, b);
     };
+    catalogIssueKeys(b.series, b.number).forEach(k => put(k, true));
     const exp = (typeof catalogIssueKeysExpanded === 'function') ? catalogIssueKeysExpanded : catalogIssueKeys;
-    exp(b.series, b.number).forEach(put);
-    if(b.title) exp(b.title, b.number).forEach(put);
+    exp(b.series, b.number).forEach(k => put(k, true));
+    if(b.title) exp(b.title, b.number).forEach(k => put(k, false));
     const fn = String(b.filename || b.stem || '').replace(/\.cbz$/i,'');
     if(fn){
       put('file:' + normSagaName(fn));
