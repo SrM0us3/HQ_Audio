@@ -76,8 +76,19 @@ window.addEventListener('unhandledrejection', function(ev){
   .topbar-row1,.topbar-row2{
     display:flex;align-items:center;gap:6px;width:100%;
   }
-  .topbar-row2{display:none;}
-  .topbar-row2.visible{display:flex;}
+  .topbar-row2,.topbar-row3{display:none;}
+  .topbar-row2.visible,.topbar-row3.visible{display:flex;}
+  .topbar-row3{
+    align-items:flex-start;flex-direction:column;gap:1px;
+    padding:2px 2px 0;
+  }
+  .topbar-row3 .ctx-kind{
+    font-size:10px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;
+  }
+  .topbar-row3 .ctx-title{
+    font-size:14px;font-weight:700;color:var(--text);line-height:1.25;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%;
+  }
   .brand{
     font-family:'Bangers',cursive;letter-spacing:1px;
     font-size:22px;color:var(--accent);
@@ -604,6 +615,10 @@ window.addEventListener('unhandledrejection', function(ev){
       <button type="button" id="btnNavBack" title="Voltar">← Voltar</button>
       <input type="search" class="top-search" id="catalogSearchTop" placeholder="Buscar série ou título…" autocomplete="off">
       <div class="sub" id="topSub" style="display:none"></div>
+    </div>
+    <div class="topbar-row3" id="topbarRow3">
+      <div class="ctx-kind" id="topCtxKind"></div>
+      <div class="ctx-title" id="topCtxTitle"></div>
     </div>
   </div>
 
@@ -2398,6 +2413,30 @@ function updateTopChrome(){
       sub.textContent = '';
     }
   }
+
+  // 3ª linha: título da série / saga / coleção (catálogo)
+  const row3 = $('#topbarRow3');
+  const ctxKind = $('#topCtxKind');
+  const ctxTitle = $('#topCtxTitle');
+  let showRow3 = false;
+  let kindTxt = '';
+  let titleTxt = '';
+  if(state.screen === 'catalog'){
+    const n = state.catalogNav || {};
+    if(n.level === 'books' && n.series){
+      showRow3 = true; kindTxt = 'Série'; titleTxt = n.series.name || '';
+    } else if(n.level === 'sagaBooks' && n.saga){
+      showRow3 = true; kindTxt = 'Saga'; titleTxt = n.saga.name || '';
+    } else if(n.level === 'collectionBooks' && n.collection){
+      showRow3 = true; kindTxt = 'Coleção'; titleTxt = n.collection.name || '';
+    } else if(n.level === 'bookDetail' && n.book){
+      showRow3 = true; kindTxt = 'Edição';
+      titleTxt = (n.book.series ? (n.book.series + ' · ') : '') + (n.book.title || n.book.filename || '');
+    }
+  }
+  if(row3) row3.classList.toggle('visible', showRow3);
+  if(ctxKind) ctxKind.textContent = kindTxt;
+  if(ctxTitle) ctxTitle.textContent = titleTxt;
   try{ driveUpdateUi(); }catch(_){}
 }
 
@@ -5964,32 +6003,6 @@ function renderJsonCatalog(){
     bar.appendChild(dlBtn);
   }
   grid.appendChild(bar);
-
-  // Título fixo (série / saga / coleção) — não some ao rolar
-  const ctxTitle = (nav.series && nav.series.name)
-    || (nav.saga && nav.saga.name)
-    || (nav.collection && nav.collection.name)
-    || (nav.book && (nav.book.series || nav.book.title))
-    || '';
-  const ctxKind = nav.saga ? 'Saga'
-    : nav.collection ? 'Coleção'
-    : nav.series ? 'Série'
-    : nav.book ? 'Edição'
-    : '';
-  if(ctxTitle && (nav.level === 'books' || nav.level === 'sagaBooks' || nav.level === 'collectionBooks' || nav.level === 'bookDetail')){
-    const sticky = document.createElement('div');
-    sticky.id = 'catalogContextSticky';
-    sticky.style.cssText = 'grid-column:1/-1;position:sticky;top:0;z-index:30;padding:10px 12px;margin:0 0 8px;background:rgba(18,20,26,.94);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;gap:2px;';
-    const k = document.createElement('div');
-    k.style.cssText = 'font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;';
-    k.textContent = ctxKind || 'Catálogo';
-    const t = document.createElement('div');
-    t.style.cssText = 'font-size:15px;font-weight:700;color:var(--text);line-height:1.25;';
-    t.textContent = ctxTitle;
-    sticky.appendChild(k);
-    sticky.appendChild(t);
-    grid.appendChild(sticky);
-  }
 
   function addCard(title, sub, onClick, icon, coverSrc, pubStyle){
     const el = document.createElement('div');
