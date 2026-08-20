@@ -5098,33 +5098,56 @@ function catalogFirstDateKey(list){
   });
   return found ? best : 99999999;
 }
-/** Data de um card de série/saga/coleção (sempre recalcula; ignora firstDate velho). */
+/** Anos válidos dos livros (para mediana — evita 1 edição com year errado). */
+function catalogBookYears(list){
+  const years = [];
+  (list || []).forEach(b => {
+    if(!b || b._isPlaceholder) return;
+    const k = catalogBookDateKey(b);
+    if(k < 99999999) years.push(Math.floor(k / 10000));
+  });
+  years.sort((a,b)=>a-b);
+  return years;
+}
+function catalogMedianYear(years){
+  if(!years || !years.length) return null;
+  const mid = Math.floor(years.length / 2);
+  if(years.length % 2) return years[mid];
+  return Math.round((years[mid-1] + years[mid]) / 2);
+}
+/** Data de um card de série/saga/coleção. */
 function catalogItemSortDate(item){
   if(!item) return 99999999;
   const books = item.books || [];
-  let d = catalogFirstDateKey(books);
-  // se saga tem ordem CBRO, usa a 1ª issue com year quando possível
+  // 1) ordem CBRO: 1ª issue com year (confiável para eventos)
   try{
     const k = normSagaName(item.name || '');
     const ord = state.sagaOrders && state.sagaOrders[k];
     if(ord && Array.isArray(ord.issues)){
       for(let i=0;i<ord.issues.length;i++){
-        const iss = ord.issues[i];
-        const y = parseInt(iss.year, 10);
-        if(y && y > 1900 && y < 2100){
-          const kd = y * 10000 + 101;
-          if(kd < d) d = kd;
-          break; // 1ª da ordem com year
-        }
+        const y = parseInt(ord.issues[i].year, 10);
+        if(y && y > 1900 && y < 2100) return y * 10000 + 101;
       }
     }
   }catch(_){}
-  // fallback: year no próprio nome (Civil War 2006, etc.)
-  if(d >= 99999999){
-    const mt = String(item.name||'').match(/\b(19|20)\d{2}\b/);
-    if(mt) d = parseInt(mt[0],10) * 10000 + 101;
+  // 2) mediana dos anos (Brightest Day não vira 1994 por 1 livro errado)
+  const years = catalogBookYears(books);
+  if(years.length >= 3){
+    // descarta extremos se houver outlier (ex.: 1994 no meio de 2009–2011)
+    let use = years.slice();
+    if(use.length >= 5){
+      const med = catalogMedianYear(use);
+      use = use.filter(y => Math.abs(y - med) <= 8);
+      if(!use.length) use = years;
+    }
+    const med = catalogMedianYear(use);
+    if(med) return med * 10000 + 101;
   }
-  return d;
+  if(years.length) return years[0] * 10000 + 101;
+  // 3) nome
+  const mt = String(item.name||'').match(/\b((?:19|20)\d{2})\b/);
+  if(mt) return parseInt(mt[1],10) * 10000 + 101;
+  return 99999999;
 }
 /** Ordena séries / sagas / coleções pela data da 1ª edição (mais antiga primeiro). */
 function catalogSortByFirstDate(items, nameKey){
@@ -5900,7 +5923,7 @@ function renderJsonCatalog(){
   // Menos poluição visual: esconde dica e reduz barra de botões ao ver edições
   const hint = document.querySelector('.catalog-hint');
   const cfg = $('#jsonCatalogCfg');
-  const deep = (nav.level === 'books' || nav.level === 'sagaBooks' || nav.level === 'bookDetail');
+  const deep = (nav.level === 'books' || nav.level === 'sagaBooks' || nav.level === 'collectionBooks' || nav.level === 'bookDetail');
   if(hint) hint.style.display = 'none';
   if(cfg){
     const row = cfg.querySelector('.row');
@@ -5917,6 +5940,7 @@ function renderJsonCatalog(){
   else if(nav.level === 'series' || nav.level === 'books') bits.push('Séries');
   if(nav.series) bits.push(nav.series.name);
   if(nav.saga) bits.push(nav.saga.name);
+  if(nav.collection) bits.push(nav.collection.name);
   if(bits.length){
     const crumb = document.createElement('span');
     crumb.className = 'crumb-path';
@@ -5924,7 +5948,7 @@ function renderJsonCatalog(){
     bar.appendChild(crumb);
   }
   // Baixar capas (só se habilitado em ⚙)
-  if(state.showCoverDlBtn && (nav.level === 'books' || nav.level === 'sagaBooks')){
+  if(state.showCoverDlBtn && (nav.level === 'books' || nav.level === 'sagaBooks' || nav.level === 'collectionBooks')){
     const dlBtn = document.createElement('button');
     dlBtn.type = 'button';
     dlBtn.textContent = '⬇ Capas';
@@ -5934,11 +5958,38 @@ function renderJsonCatalog(){
       let list = [];
       if(nav.level === 'books' && nav.series) list = nav.series.books || [];
       else if(nav.level === 'sagaBooks' && nav.saga) list = nav.saga.books || [];
+      else if(nav.level === 'collectionBooks' && nav.collection) list = nav.collection.books || [];
       catalogDownloadCoversForBooks(list, dlBtn);
     };
     bar.appendChild(dlBtn);
   }
   grid.appendChild(bar);
+
+  // Título fixo (série / saga / coleção) — não some ao rolar
+  const ctxTitle = (nav.series && nav.series.name)
+    || (nav.saga && nav.saga.name)
+    || (nav.collection && nav.collection.name)
+    || (nav.book && (nav.book.series || nav.book.title))
+    || '';
+  const ctxKind = nav.saga ? 'Saga'
+    : nav.collection ? 'Coleção'
+    : nav.series ? 'Série'
+    : nav.book ? 'Edição'
+    : '';
+  if(ctxTitle && (nav.level === 'books' || nav.level === 'sagaBooks' || nav.level === 'collectionBooks' || nav.level === 'bookDetail')){
+    const sticky = document.createElement('div');
+    sticky.id = 'catalogContextSticky';
+    sticky.style.cssText = 'grid-column:1/-1;position:sticky;top:0;z-index:30;padding:10px 12px;margin:0 0 8px;background:rgba(18,20,26,.94);backdrop-filter:blur(8px);border:1px solid var(--border);border-radius:10px;display:flex;flex-direction:column;gap:2px;';
+    const k = document.createElement('div');
+    k.style.cssText = 'font-size:11px;color:var(--text-dim);text-transform:uppercase;letter-spacing:.04em;';
+    k.textContent = ctxKind || 'Catálogo';
+    const t = document.createElement('div');
+    t.style.cssText = 'font-size:15px;font-weight:700;color:var(--text);line-height:1.25;';
+    t.textContent = ctxTitle;
+    sticky.appendChild(k);
+    sticky.appendChild(t);
+    grid.appendChild(sticky);
+  }
 
   function addCard(title, sub, onClick, icon, coverSrc, pubStyle){
     const el = document.createElement('div');
@@ -6222,7 +6273,7 @@ function renderJsonCatalog(){
   if(!pub){ state.catalogNav.level = 'publishers'; renderJsonCatalog(); return; }
 
   // --- series or sagas list ---
-  if(nav.level === 'series' || nav.level === 'sagas'){
+  if(nav.level === 'series' || nav.level === 'sagas' || nav.level === 'collections'){
     const tog = document.createElement('div');
     tog.style.cssText = 'grid-column:1/-1;display:flex;gap:8px;margin-bottom:4px;';
     [['series','Séries'],['sagas','Sagas'],['collections','Coleções']].forEach(([mode, label]) => {
