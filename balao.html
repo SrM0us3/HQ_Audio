@@ -4506,26 +4506,52 @@ function catalogSeriesTokens(s){
   if(!t) return [];
   return t.split(' ').filter(w => w.length >= 2);
 }
-/** Duas séries “parecem” a mesma? */
+/** Duas séries “parecem” a mesma? (não confunde "Flashpoint" com "Flashpoint: Reverse Flash") */
 function catalogSeriesLooseEqual(a, b){
   const ka = normSeriesKey(a);
   const kb = normSeriesKey(b);
   if(!ka || !kb) return false;
   if(ka === kb) return true;
-  if(ka.indexOf(kb) >= 0 || kb.indexOf(ka) >= 0) return true;
+
   const ta = catalogSeriesTokens(a);
   const tb = catalogSeriesTokens(b);
   if(!ta.length || !tb.length) return false;
-  // todos os tokens da menor estão na maior
-  // (ex.: "brightest day aftermath the search" ⊂ "… search for swamp thing")
+
+  // Prefixo perigoso: "flashpoint" ⊂ "flashpoint reverse flash" NÃO é a mesma série
+  // Só aceita contains se a diferença for subtítulo do tipo "search" → "search for swamp thing"
+  // (mesma base, tokens extras no fim), não se a menor for só o título-pai do evento.
+  const shorter = ka.length <= kb.length ? ka : kb;
+  const longer = ka.length <= kb.length ? kb : ka;
+  if(longer.indexOf(shorter) === 0 || longer.indexOf(shorter) >= 0){
+    const rest = longer.replace(shorter, ' ').replace(/\s+/g, ' ').trim();
+    // se a menor tem só 1 token (ex.: "flashpoint"), NÃO expandir para minisséries "flashpoint xxx"
+    const shortTokens = shorter.split(' ').filter(Boolean);
+    if(shortTokens.length <= 1 && rest.length > 0) return false;
+    // se rest é "for swamp thing" / "aftermath …" ok; se rest começa com palavra capital típica de minissérie e a base é curta, ok se >=2 tokens base
+    if(shortTokens.length >= 2 && rest.length > 0){
+      // base multi-palavra contida: ok (search ⊂ search for swamp thing)
+      return true;
+    }
+    if(rest.length === 0) return true;
+  }
+
   const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
   if(small.length < 2){
-    // 1 token só: exige igualdade quase total (evita match fraco)
-    return small.length === 1 && big.indexOf(small[0]) >= 0 && (ka === kb || ka.indexOf(kb)>=0 || kb.indexOf(ka)>=0);
+    // um único token: só match exato
+    return ka === kb;
   }
   const hit = small.filter(w => big.indexOf(w) >= 0).length;
-  // exige quase todos os tokens da menor (≥80% e pelo menos 2)
-  return hit >= Math.max(2, Math.ceil(small.length * 0.8));
+  if(hit < Math.max(2, Math.ceil(small.length * 0.8))) return false;
+  // se a maior tem MUITOS tokens a mais, exige que a menor seja prefixo de tokens
+  if(big.length >= small.length + 2){
+    // tokens iniciais iguais?
+    let pref = 0;
+    for(let i=0;i<small.length;i++){ if(big[i] === small[i]) pref++; else break; }
+    // "brightest day aftermath the search" vs "... search for swamp thing" — não é prefixo, mas hit alto
+    // permite se hit === small.length (todos os tokens da menor existem na maior)
+    return hit >= small.length;
+  }
+  return true;
 }
 /** Extra: gera chaves alternativas encurtando subtítulo após ":" ou "Aftermath" */
 function catalogIssueKeysExpanded(series, number){
@@ -4834,10 +4860,20 @@ function catalogMatchIssueToBook(iss, byId, byKey){
     if(!mt) mt = disp.match(/^(.+?)\s+#?(\d+(?:\.\d+)?)\s*(?:\(|$)/);
     if(mt) pushKeys(mt[1], mt[2]);
   }
+  // 1) chaves exatas primeiro (Flashpoint|1 não deve perder para Flashpoint Reverse Flash)
   for(let i=0;i<candidates.length;i++){
     if(byKey[candidates[i]]) found = catalogPreferBook(found, byKey[candidates[i]]);
   }
-  // fuzzy: número igual + série aproximada (and/&/The)
+  // se a chave exata series|num existe, não faz fuzzy (evita minissérie roubar a principal)
+  if(found){
+    const want = normSeriesKey(iss.series || iss.series_name || '');
+    const got = normSeriesKey(found.series || '');
+    if(want && got && want === got){
+      return found;
+    }
+    // se candidate tinha chave exata na lista, preferir esse
+  }
+  // 2) fuzzy: número igual + série aproximada (and/&/The) — só se ainda não achou exact
   const num = catalogNormNum(iss.number != null ? iss.number : (disp.match(/#\s*(\d+)/)||[])[1]);
   const seriesCands = [iss.series, iss.series_name, disp.split('#')[0]].filter(Boolean);
   if(num && seriesCands.length){
