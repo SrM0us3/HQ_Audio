@@ -807,7 +807,8 @@ window.addEventListener('unhandledrejection', function(ev){
       html += '<button type="button" id="setFbLogin" style="padding:12px;border-radius:10px;border:none;background:#e4402c;color:#fff;font-weight:600">Entrar no Firebase (Google)</button>';
       html += '<button type="button" id="setFbLogout" style="padding:12px;border-radius:10px;border:1px solid #444;background:transparent;color:#aaa;display:none">Sair do Firebase</button>';
       html += '<button type="button" id="setFbRefresh" style="padding:10px;border-radius:10px;border:1px solid #333;background:#2a2d38;color:#f2f2f2">Atualizar status Firebase</button>';
-      html += '<button type="button" id="setFbSyncOrders" onclick="try{window.__fbSyncSaga&&window.__fbSyncSaga()}catch(e){alert(e)}" style="padding:12px;border-radius:10px;border:none;background:#2a6;color:#fff;font-weight:600">Sincronizar ordens de saga agora</button>';
+      html += '<button type="button" id="setFbPushOrders" onclick="try{window.__fbPushOrders&&window.__fbPushOrders()}catch(e){alert(e)}" style="padding:12px;border-radius:10px;border:1px solid #333;background:#2a2d38;color:#f2f2f2;font-weight:600">Enviar ordens deste aparelho ao Firebase</button>';
+      html += '<button type="button" id="setFbSyncOrders" onclick="try{window.__fbSyncSaga&&window.__fbSyncSaga()}catch(e){alert(e)}" style="padding:12px;border-radius:10px;border:none;background:#2a6;color:#fff;font-weight:600">Baixar ordens do Firebase (celular)</button>';
       html += '</div>';
       html += '<div style="font-size:11px;color:#888;margin-bottom:8px">No celular use o Chrome (não abra pelo WhatsApp). Se não conectar, toque de novo após atualizar o app.</div>';
       html += '<div style="margin-top:8px;font-size:13px;font-weight:600">Google Drive (catálogo e capas)</div>';
@@ -1429,15 +1430,26 @@ async function fbPullAllOverrides(){
 }
 async function fbSaveSagaOrders(){
   const root = fbUserPath();
-  if(!root) return false;
+  if(!root){
+    console.warn('fbSaveSagaOrders: sem user');
+    return false;
+  }
+  const orders = state.sagaOrders || {};
+  const n = Object.keys(orders).length;
+  if(!n){
+    console.warn('fbSaveSagaOrders: nenhuma ordem local para enviar');
+    return false;
+  }
   const payload = {
-    orders: state.sagaOrders || {},
+    orders: orders,
     meta: state.sagaOrdersMeta || {},
     savedAt: Date.now(),
+    orderCount: n,
     updatedAt: firebase.firestore.FieldValue.serverTimestamp()
   };
-  // set completo (não merge parcial de orders) para o outro aparelho receber a mesma foto
   await root.collection('meta').doc('sagaOrders').set(payload);
+  try{ await storeSet('saga-orders-savedAt', payload.savedAt); }catch(_){}
+  console.log('[fb] sagaOrders salvas:', n, Object.keys(orders));
   return true;
 }
 async function fbPullSagaOrders(opts){
@@ -1446,31 +1458,38 @@ async function fbPullSagaOrders(opts){
   if(!root) return false;
   const snap = await root.collection('meta').doc('sagaOrders').get();
   if(!snap.exists){
-    if(opts.verbose) toast('Nenhuma ordem de saga no Firebase ainda', 3000);
+    if(opts.verbose){
+      const nLocal = Object.keys(state.sagaOrders || {}).length;
+      toast('Firebase sem ordens ainda. Neste aparelho: ' + nLocal + '. Importe no PC com Firebase ligado.', 5000);
+    }
     return false;
   }
   const d = snap.data() || {};
   const remoteAt = d.savedAt || 0;
   const remoteOrders = d.orders || {};
   const remoteMeta = d.meta || {};
-  // max importedAt local
-  let localMax = 0;
-  Object.keys(state.sagaOrdersMeta || {}).forEach(k => {
-    const t = (state.sagaOrdersMeta[k] && state.sagaOrdersMeta[k].importedAt) || 0;
-    if(t > localMax) localMax = t;
-  });
-  const localSaved = (await storeGet('saga-orders-savedAt')) || 0;
-  if(!opts.force && remoteAt && localSaved && remoteAt <= localSaved && Object.keys(state.sagaOrders||{}).length){
-    if(opts.verbose) toast('Ordens de saga já sincronizadas', 2500);
+  const remoteCount = Object.keys(remoteOrders).length;
+
+  // NÃO sobrescrever local com remoto VAZIO
+  if(remoteCount === 0){
+    if(opts.verbose) toast('Firebase tem documento de ordens, mas está vazio. Reimporte no PC.', 5000);
     return false;
   }
-  // substitui pelas ordens remotas (fonte da verdade = último save no Firebase)
-  state.sagaOrders = remoteOrders;
-  state.sagaOrdersMeta = remoteMeta;
+
+  const localSaved = (await storeGet('saga-orders-savedAt')) || 0;
+  if(!opts.force && remoteAt && localSaved && remoteAt <= localSaved && Object.keys(state.sagaOrders||{}).length){
+    if(opts.verbose) toast('Ordens de saga já sincronizadas (' + remoteCount + ')', 2500);
+    return false;
+  }
+
+  // mescla: remoto ganha por chave; não apaga chaves locais se remoto não tiver
+  Object.keys(remoteOrders).forEach(k => {
+    state.sagaOrders[k] = remoteOrders[k];
+    state.sagaOrdersMeta[k] = remoteMeta[k] || state.sagaOrdersMeta[k] || { event: k, importedAt: remoteAt };
+  });
   await sagaOrdersSaveLocal();
   try{ await storeSet('saga-orders-savedAt', remoteAt || Date.now()); }catch(_){}
 
-  // Reaplica no catálogo local (series_group + alternate_number)
   let totalApplied = 0;
   const names = [];
   if(state.jsonCatalog && typeof catalogApplySagaOrderToCatalog === 'function'){
@@ -1488,7 +1507,7 @@ async function fbPullSagaOrders(opts){
     try{ renderJsonCatalog(); }catch(_){}
   }
   if(opts.verbose || totalApplied || names.length){
-    toast('Ordens Firebase: ' + (names.length ? names.join(', ') : 'ok') +
+    toast('Ordens Firebase: ' + names.join(', ') +
       (totalApplied ? (' · ' + totalApplied + ' eds no catálogo') : ''), 5000);
   }
   return true;
@@ -1553,6 +1572,28 @@ async function fbSyncSagaAndCatalog(){
   }
 }
 window.__fbSyncSaga = function(){ fbSyncSagaAndCatalog(); };
+window.__fbPushOrders = async function(){
+  try{
+    if(!state.fb || !state.fb.user){
+      if(state.fb && state.fb.auth && state.fb.auth.currentUser) state.fb.user = state.fb.auth.currentUser;
+    }
+    if(!state.fb || !state.fb.user){
+      alert('Entre no Firebase primeiro (mesma conta do celular).');
+      return;
+    }
+    const n = Object.keys(state.sagaOrders || {}).length;
+    if(!n){
+      alert('Nenhuma ordem neste aparelho. Importe o saga-order-*.json antes.');
+      return;
+    }
+    const ok = await fbSaveSagaOrders();
+    alert(ok
+      ? ('Enviado ao Firebase: ' + n + ' ordem(ns)\n' + Object.keys(state.sagaOrders).map(k => (state.sagaOrdersMeta[k]&&state.sagaOrdersMeta[k].event)||k).join(', ') + '\n\nAgora no celular: Baixar ordens do Firebase.')
+      : 'Falha ao enviar. Veja o console (F12).');
+  }catch(e){
+    alert('Erro: ' + (e.message||e));
+  }
+};
 
 let _fbPushTimer = null;
 function scheduleFbProgressPush(){
@@ -4439,7 +4480,15 @@ function sagaOrdersImportFile(file){
         };
         await sagaOrdersSaveLocal();
         try{ await storeSet('saga-orders-savedAt', Date.now()); }catch(_){}
-        try{ if(state.fb && state.fb.user) await fbSaveSagaOrders(); }catch(e){ console.warn(e); }
+        let fbOk = false;
+        try{
+          if(state.fb && state.fb.user){
+            fbOk = await fbSaveSagaOrders();
+          }
+        }catch(e){
+          console.warn(e);
+          try{ alert('Ordem importada localmente, mas FALHOU ao enviar ao Firebase:\n' + (e.message||e) + '\n\nEntre no Firebase e use “Enviar ordens ao Firebase”.'); }catch(_){}
+        }
         // Aplica no catalogo.json em memória + overrides + Drive
         let applied = 0;
         try{
@@ -4464,7 +4513,13 @@ function sagaOrdersImportFile(file){
         let msg = 'Ordem: ' + order.event + ' · ' + (order.issues||[]).length + ' na lista';
         if(applied) msg += ' · ' + applied + ' gravadas no catálogo';
         if(foundN || missN) msg += ' · ' + foundN + ' encontradas · ' + missN + ' faltando';
-        toast(msg, 7000);
+        if(fbOk) msg += ' · Firebase ✓';
+        else if(!(state.fb && state.fb.user)) msg += ' · Firebase NÃO conectado (não enviou)';
+        else msg += ' · Firebase falhou ao enviar';
+        toast(msg, 8000);
+        if(!fbOk){
+          try{ alert(msg + '\n\nPara o celular receber: entre no Firebase neste PC e toque em “Enviar ordens ao Firebase”.'); }catch(_){}
+        }
         if(typeof renderJsonCatalog === 'function') renderJsonCatalog();
         resolve(order);
       }catch(e){ reject(e); }
