@@ -5198,6 +5198,119 @@ function catalogSortByFirstDate(items, nameKey){
     return String(a[nameKey]||'').localeCompare(String(b[nameKey]||''), 'pt', {sensitivity:'base'});
   });
 }
+/** Saga principal de uma série (series_group mais frequente, ignorando coleções). */
+function catalogSeriesPrimarySaga(series){
+  if(!series) return '';
+  const counts = {};
+  (series.books || []).forEach(b => {
+    if(!b) return;
+    const raw = String(b.series_group || b.seriesGroup || '').trim();
+    if(!raw) return;
+    raw.split(',').forEach(part => {
+      const p = part.trim();
+      if(!p) return;
+      if(typeof catalogIsCollectionName === 'function' && catalogIsCollectionName(p)) return;
+      counts[p] = (counts[p] || 0) + 1;
+    });
+  });
+  let best = '', n = 0;
+  Object.keys(counts).forEach(k => {
+    if(counts[k] > n){ n = counts[k]; best = k; }
+  });
+  return best;
+}
+/**
+ * Séries: mantém ordem por data, mas agrupa lado a lado as que compartilham a mesma saga.
+ * Chave: (data da saga/cluster, nome da saga, data da série, nome da série).
+ */
+/** Total esperado de uma série/coleção (Count do ComicRack / "of N" no arquivo). */
+function catalogExpectedTotal(books){
+  let best = 0;
+  (books || []).forEach(b => {
+    if(!b) return;
+    const c = parseInt(b.count || b.Count || b.totalIssues || b.total || 0, 10);
+    if(c > best) best = c;
+    const blob = String(b.filename || b.title || '');
+    const mt = blob.match(/\(\s*of\s+(\d+)\s*\)/i) || blob.match(/\bof\s+(\d+)\b/i);
+    if(mt){
+      const n = parseInt(mt[1], 10);
+      if(n > best) best = n;
+    }
+  });
+  return best > 0 ? best : null;
+}
+/** Stats de posse: tenho / total / faltam / completo */
+function catalogOwnedStats(books, opts){
+  opts = opts || {};
+  const list = (books || []).filter(b => b && !b._isPlaceholder);
+  // dedupe por série+#
+  const seen = new Set();
+  let owned = 0;
+  list.forEach(b => {
+    const k = (typeof normSeriesKey === 'function' ? normSeriesKey(b.series||'') : (b.series||''))
+      + '|' + (typeof catalogNormNum === 'function' ? catalogNormNum(b.number) : String(b.number||''));
+    if(seen.has(k)) return;
+    seen.add(k);
+    owned++;
+  });
+  let total = opts.total != null ? opts.total : catalogExpectedTotal(list);
+  if(total != null && owned > total) total = owned; // já tem mais que o "of N"
+  let missing = (total != null) ? Math.max(0, total - owned) : null;
+  return { owned: owned, total: total, missing: missing, complete: total != null && missing === 0 && owned > 0 };
+}
+function catalogStatsLabel(st, kind){
+  if(!st) return '';
+  kind = kind || 'eds';
+  if(st.complete) return st.owned + ' ' + kind + ' · completo';
+  if(st.total != null){
+    return st.owned + '/' + st.total + ' ' + kind + (st.missing ? (' · faltam ' + st.missing) : '');
+  }
+  return st.owned + ' ' + kind;
+}
+/** Stats de saga com ordem CBRO */
+function catalogSagaOwnedStats(sg){
+  const name = (sg && sg.name) || '';
+  const key = typeof normSagaName === 'function' ? normSagaName(name) : name;
+  const ord = state.sagaOrders && state.sagaOrders[key];
+  if(ord && Array.isArray(ord.issues) && ord.issues.length){
+    const list = (typeof catalogBuildSagaList === 'function')
+      ? catalogBuildSagaList(sg, 'AlternateNumber')
+      : (sg.books || []);
+    const owned = list.filter(b => b && !b._isPlaceholder).length;
+    const total = ord.issues.length;
+    const missing = Math.max(0, total - owned);
+    return { owned: owned, total: total, missing: missing, complete: missing === 0 && owned > 0 };
+  }
+  return catalogOwnedStats(sg.books || [], {});
+}
+
+function catalogSortSeriesByDateAndSaga(seriesList){
+  const items = (seriesList || []).map(s => {
+    const saga = catalogSeriesPrimarySaga(s);
+    const seriesDate = catalogItemSortDate(s);
+    return { s: s, saga: saga, seriesDate: seriesDate };
+  });
+  // data do cluster = menor data entre séries daquela saga (ou a própria data se sem saga)
+  const sagaMin = {};
+  items.forEach(it => {
+    if(!it.saga) return;
+    if(sagaMin[it.saga] == null || it.seriesDate < sagaMin[it.saga]){
+      sagaMin[it.saga] = it.seriesDate;
+    }
+  });
+  items.forEach(it => {
+    it.clusterDate = it.saga ? (sagaMin[it.saga] != null ? sagaMin[it.saga] : it.seriesDate) : it.seriesDate;
+    it.clusterName = it.saga || ('￿' + (it.s.name || '')); // sem saga: não agrupa com outras
+  });
+  items.sort((a,b) => {
+    if(a.clusterDate !== b.clusterDate) return a.clusterDate - b.clusterDate;
+    const cn = String(a.clusterName).localeCompare(String(b.clusterName), 'pt', {sensitivity:'base'});
+    if(cn) return cn;
+    if(a.seriesDate !== b.seriesDate) return a.seriesDate - b.seriesDate;
+    return String(a.s.name||'').localeCompare(String(b.s.name||''), 'pt', {sensitivity:'base'});
+  });
+  return items.map(it => it.s);
+}
 /** Heurística: é coleção (Salvat, Oficial, Definitiva…) e não evento crossover */
 function catalogIsCollectionName(name){
   const s = String(name||'').toLowerCase();
@@ -5972,8 +6085,12 @@ function renderJsonCatalog(){
   const q = (($('#catalogSearchTop') && $('#catalogSearchTop').value) || ($('#catalogSearch') && $('#catalogSearch').value) || '').trim().toLowerCase();
 
   if(status){
-    const meta = 'v' + (data.version||'?') + ' · ' + (data.totalBooks||0) + ' vols · ' + (data.totalSeries||0) + ' séries';
-    status.textContent = meta + (data.generatedAt ? (' · ' + data.generatedAt) : '');
+    // resumo do arquivo catalogo.json (versão do gerador · quantos volumes · quantas séries · quando foi gerado)
+    const vols = data.totalBooks != null ? data.totalBooks : '';
+    const ser = data.totalSeries != null ? data.totalSeries : '';
+    let when = data.generatedAt || '';
+    if(when && when.indexOf('T') > 0) when = when.replace('T', ' ').replace(/Z$/, ' UTC').slice(0, 19);
+    status.textContent = 'Catálogo JSON · ' + vols + ' volumes · ' + ser + ' séries' + (when ? (' · gerado ' + when) : '');
   }
   // Menos poluição visual: esconde dica e reduz barra de botões ao ver edições
   const hint = document.querySelector('.catalog-hint');
@@ -6207,14 +6324,14 @@ function renderJsonCatalog(){
     wrap.appendChild(h);
     const meta = document.createElement('div');
     meta.className = 'meta-line';
-    const bits = [];
-    if(book.series) bits.push(book.series);
-    if(num) bits.push('#' + num);
-    if(book.year) bits.push(String(book.year));
-    if(book.volume) bits.push('Vol. ' + book.volume);
-    if(book.story_arc) bits.push(book.story_arc);
-    if(book.series_group) bits.push(book.series_group);
-    meta.textContent = bits.join(' · ') || '—';
+    const metaBits = [];
+    if(book.series) metaBits.push(book.series);
+    if(num) metaBits.push('#' + num);
+    if(book.year) metaBits.push(String(book.year));
+    if(book.volume) metaBits.push('Vol. ' + book.volume);
+    if(book.story_arc) metaBits.push(book.story_arc);
+    if(book.series_group) metaBits.push(book.series_group);
+    meta.textContent = metaBits.join(' · ') || '—';
     wrap.appendChild(meta);
 
     const fields = [
@@ -6342,7 +6459,8 @@ function renderJsonCatalog(){
         const cover = catalogCoverSrc(first);
         const d = catalogItemSortDate(cg);
         const y = (d < 99999999) ? (' · ' + Math.floor(d/10000)) : (first && first.year ? (' · ' + first.year) : '');
-        addCard(cg.name, (cg.count||(cg.books||[]).length) + ' vols' + y, () => {
+        const st = catalogOwnedStats(cg.books || [], { total: (cg.count && cg.count > (cg.books||[]).length) ? cg.count : null });
+        addCard(cg.name, catalogStatsLabel(st, 'vols') + y, () => {
           state.catalogNav = { level: 'collectionBooks', pub: pub, collection: cg, mode: 'collections', order: 'Number' };
           renderJsonCatalog();
         }, '📦', cover);
@@ -6373,24 +6491,10 @@ function renderJsonCatalog(){
         const cover = catalogCoverSrc(first);
         const d = catalogItemSortDate(sg);
         const y = (d < 99999999) ? (' · ' + Math.floor(d/10000)) : (first && first.year ? (' · ' + first.year) : '');
-        // contagem: se há ordem CBRO, usa issues; senão livros únicos
-        let nShow = sg.count || (sg.books||[]).length || 0;
-        try{
-          const k = normSagaName(sg.name||'');
-          const ord = state.sagaOrders && state.sagaOrders[k];
-          if(ord && Array.isArray(ord.issues) && ord.issues.length){
-            nShow = ord.issues.length;
-          } else if(sg.books && sg.books.length){
-            const seen = new Set();
-            sg.books.forEach(b => {
-              if(!b) return;
-              const kk = (normSeriesKey(b.series||'')||'') + '|' + catalogNormNum(b.number);
-              seen.add(kk);
-            });
-            nShow = seen.size || sg.books.length;
-          }
-        }catch(_){}
-        addCard(sg.name, nShow + ' eds' + y, () => {
+        let st;
+        try{ st = catalogSagaOwnedStats(sg); }catch(_){ st = catalogOwnedStats(sg.books||[]); }
+        const sub = catalogStatsLabel(st, 'eds') + y;
+        addCard(sg.name, sub, () => {
           state.catalogNav = { level: 'sagaBooks', pub: pub, saga: sg, mode: 'saga', order: 'AlternateNumber' };
           renderJsonCatalog();
         }, '📖', cover);
@@ -6408,12 +6512,14 @@ function renderJsonCatalog(){
       });
     }
     setCatalogMetaLine(bits, series.length + ' séries');
-    // ordem: data da 1ª edição, depois nome
-    series = catalogSortByFirstDate(series, 'name');
+    // ordem: data, com séries da mesma saga agrupadas lado a lado
+    series = catalogSortSeriesByDateAndSaga(series);
     series.forEach(s => {
       const arcs = s.arcs || [];
-      let sub = (s.count||0) + ' vols';
       const first = catalogFirstBook(s.books || [], 'Number');
+      const st = catalogOwnedStats(s.books || [], { total: (s.count && s.count > (s.books||[]).length) ? s.count : null });
+      // se s.count for só "quantos tenho", não usar como total
+      let sub = catalogStatsLabel(st, 'vols');
       const d = catalogItemSortDate(s);
       if(d < 99999999) sub += ' · desde ' + Math.floor(d/10000);
       else if(first && first.year) sub += ' · desde ' + first.year;
