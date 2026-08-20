@@ -4709,25 +4709,29 @@ function catalogIssueKeys(series, number){
 }
 function catalogIsTpbBook(b){
   if(!b) return false;
+  // ComicRack Format: TPB, Omnibus, Hardcover, HC…
+  const format = String(b.format || b.Format || b.binding || b.Binding || '').toLowerCase().trim();
+  if(format){
+    if(/\btpb\b/.test(format) || /trade/.test(format)) return true;
+    if(/\bomnibus\b/.test(format)) return true;
+    if(/\bhc\b/.test(format) || /hardcover/.test(format) || /capa\s*dura/.test(format)) return true;
+    if(/encadernad/.test(format)) return true;
+    if(/absolute/.test(format) || /compendium/.test(format)) return true;
+    if(/graphic\s*novel/.test(format)) return true;
+  }
   const fn = String(b.filename || b.stem || '');
   const title = String(b.title || '');
   const series = String(b.series || '');
-  const format = String(b.format || b.binding || '');
-  const blob = (fn + ' ' + title + ' ' + format + ' ' + series).toLowerCase();
+  const blob = (fn + ' ' + title + ' ' + series).toLowerCase();
   if(/\btpb\b/.test(blob)) return true;
   if(/trade\s*paperback/.test(blob)) return true;
   if(/\bomnibus\b/.test(blob)) return true;
-  if(/\bhc\b/.test(blob) || /\bhardcover\b/.test(blob)) return true;
   if(/encadernad[oa]/.test(blob)) return true;
   if(/capa\s*dura/.test(blob)) return true;
   if(/edi[cç][aã]o\s*definitiva/.test(blob)) return true;
-  if(/\babsolute\b/.test(blob)) return true;
-  if(/\bcompendium\b/.test(blob)) return true;
-  // filename sem #N mas série é evento (TPB “Blackest Night (2010).cbz”)
   const hasIssueNum = /#\s*\d+/.test(fn) || /#\s*\d+/.test(title);
   const looksLikeEventCollected = /blackest\s*night|brightest\s*day|infinite\s*crisis|civil\s*war|secret\s*invasion|final\s*crisis|flashpoint/i.test(fn + ' ' + title);
   if(looksLikeEventCollected && !hasIssueNum){
-    // número de edição 1 genérico em TPB é comum no ComicRack
     const n = catalogNormNum(b.number);
     if(!n || n === '1' || n === '0') return true;
   }
@@ -4736,6 +4740,7 @@ function catalogIsTpbBook(b){
   if(pc && pc >= 150) return true;
   return false;
 }
+
 function catalogPreferBook(a, b){
   // retorna o melhor entre a e b (não-TPB > com # no nome > com thumb)
   if(!a) return b;
@@ -5373,21 +5378,27 @@ function catalogIsCollectionName(name){
 }
 function catalogBookCollectionName(b){
   if(!b) return '';
-  // campo dedicado (futuro / script)
+  // ComicRack Genre = nome da coleção (vazio = edição normal)
+  const genre = String(b.genre || b.Genre || b.genres || '').trim();
+  if(genre){
+    // pode vir "Coleção X, Super-Herói" — pega o primeiro segmento útil
+    const parts = genre.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    // se só um valor, é a coleção
+    if(parts.length === 1) return parts[0];
+    // se vários, prefere o que parece nome de coleção; senão o primeiro
+    for(let i=0;i<parts.length;i++){
+      if(catalogIsCollectionName(parts[i])) return parts[i];
+    }
+    return parts[0];
+  }
   if(b.collection) return String(b.collection).trim();
   if(b.Collection) return String(b.Collection).trim();
-  // tags: collection:Nome ou coleção:Nome
-  const tags = b.tags || b.Tags || b.tag || '';
-  const tagStr = Array.isArray(tags) ? tags.join(',') : String(tags);
-  let mt = tagStr.match(/(?:^|[,;])\s*(?:collection|cole[cç][aã]o)\s*[:=]\s*([^,;]+)/i);
-  if(mt) return mt[1].trim();
-  // series_group se for nome de coleção
+  // legado: series_group com nome de coleção (até migrar tudo para Genre)
   const sg = String(b.series_group || b.seriesGroup || '');
   for(const part of sg.split(',')){
     const p = part.trim();
     if(p && catalogIsCollectionName(p)) return p;
   }
-  // série em si é coleção
   if(catalogIsCollectionName(b.series)) return String(b.series).trim();
   return '';
 }
