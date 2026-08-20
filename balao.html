@@ -5201,8 +5201,10 @@ function catalogSortByFirstDate(items, nameKey){
 /** Saga principal de uma série (series_group mais frequente, ignorando coleções). */
 function catalogSeriesPrimarySaga(series){
   if(!series) return '';
+  const books = series.books || [];
+  if(!books.length) return '';
   const counts = {};
-  (series.books || []).forEach(b => {
+  books.forEach(b => {
     if(!b) return;
     const raw = String(b.series_group || b.seriesGroup || '').trim();
     if(!raw) return;
@@ -5217,12 +5219,18 @@ function catalogSeriesPrimarySaga(series){
   Object.keys(counts).forEach(k => {
     if(counts[k] > n){ n = counts[k]; best = k; }
   });
-  return best;
+  if(!best) return '';
+  const total = books.length;
+  const sn = normSagaName(series.name||'');
+  const bn = normSagaName(best);
+  const nameHit = (sn && bn && (sn.indexOf(bn) >= 0 || bn.indexOf(sn) >= 0));
+  // minissérie do evento, ou maioria das eds, ou nome da série é o evento
+  if(nameHit) return best;
+  if(total <= 6 && n >= Math.ceil(total * 0.5)) return best;
+  if(n >= total * 0.6) return best;
+  if(n >= 8) return best;
+  return '';
 }
-/**
- * Séries: mantém ordem por data, mas agrupa lado a lado as que compartilham a mesma saga.
- * Chave: (data da saga/cluster, nome da saga, data da série, nome da série).
- */
 /** Total esperado de uma série/coleção (Count do ComicRack / "of N" no arquivo). */
 function catalogExpectedTotal(books){
   let best = 0;
@@ -5284,23 +5292,60 @@ function catalogSagaOwnedStats(sg){
   return catalogOwnedStats(sg.books || [], {});
 }
 
+function catalogSagaEventDate(sagaName){
+  if(!sagaName) return 99999999;
+  const key = normSagaName(sagaName);
+  try{
+    const ord = state.sagaOrders && state.sagaOrders[key];
+    if(ord && Array.isArray(ord.issues)){
+      for(let i=0;i<ord.issues.length;i++){
+        const y = parseInt(ord.issues[i].year, 10);
+        if(y >= 1900 && y <= 2100) return y * 10000 + 101;
+      }
+    }
+  }catch(_){}
+  const years = [];
+  try{
+    if(typeof catalogAllBooks === 'function' && state.jsonCatalog){
+      catalogAllBooks(state.jsonCatalog).forEach(b => {
+        if(!b) return;
+        const raw = String(b.series_group || b.seriesGroup || '');
+        if(!raw.split(',').some(p => normSagaName(p.trim()) === key)) return;
+        const dk = catalogBookDateKey(b);
+        if(dk < 99999999) years.push(Math.floor(dk / 10000));
+      });
+    }
+  }catch(_){}
+  years.sort((a,b)=>a-b);
+  if(years.length){
+    let use = years.slice();
+    if(use.length >= 5){
+      const med0 = use[Math.floor(use.length/2)];
+      use = use.filter(y => Math.abs(y - med0) <= 6);
+      if(!use.length) use = years;
+    }
+    return use[Math.floor(use.length/2)] * 10000 + 101;
+  }
+  const mt = String(sagaName).match(/\b((?:19|20)\d{2})\b/);
+  if(mt) return parseInt(mt[1],10) * 10000 + 101;
+  return 99999999;
+}
+/** Séries por data; mesma saga junta na época do EVENTO (ex. BN em ~2009, não em 1993). */
 function catalogSortSeriesByDateAndSaga(seriesList){
+  const eventDateCache = {};
   const items = (seriesList || []).map(s => {
     const saga = catalogSeriesPrimarySaga(s);
     const seriesDate = catalogItemSortDate(s);
-    return { s: s, saga: saga, seriesDate: seriesDate };
-  });
-  // data do cluster = menor data entre séries daquela saga (ou a própria data se sem saga)
-  const sagaMin = {};
-  items.forEach(it => {
-    if(!it.saga) return;
-    if(sagaMin[it.saga] == null || it.seriesDate < sagaMin[it.saga]){
-      sagaMin[it.saga] = it.seriesDate;
+    let clusterDate = seriesDate;
+    let clusterName = '\uffff' + (s.name || '');
+    if(saga){
+      if(eventDateCache[saga] == null) eventDateCache[saga] = catalogSagaEventDate(saga);
+      let ed = eventDateCache[saga];
+      if(ed >= 99999999) ed = seriesDate;
+      clusterDate = ed;
+      clusterName = saga;
     }
-  });
-  items.forEach(it => {
-    it.clusterDate = it.saga ? (sagaMin[it.saga] != null ? sagaMin[it.saga] : it.seriesDate) : it.seriesDate;
-    it.clusterName = it.saga || ('￿' + (it.s.name || '')); // sem saga: não agrupa com outras
+    return { s: s, saga: saga, seriesDate: seriesDate, clusterDate: clusterDate, clusterName: clusterName };
   });
   items.sort((a,b) => {
     if(a.clusterDate !== b.clusterDate) return a.clusterDate - b.clusterDate;
