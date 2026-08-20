@@ -1428,6 +1428,25 @@ async function fbPullAllOverrides(){
     }
   }
 }
+/** Remove undefined/NaN de objetos aninhados (Firestore não aceita undefined) */
+function fbSanitize(value){
+  if(value === undefined) return undefined; // signal omit
+  if(value === null) return null;
+  if(typeof value === 'number' && isNaN(value)) return null;
+  if(Array.isArray(value)){
+    return value.map(fbSanitize).filter(function(v){ return v !== undefined; });
+  }
+  if(value && typeof value === 'object' && value.constructor === Object){
+    const out = {};
+    Object.keys(value).forEach(function(k){
+      const v = fbSanitize(value[k]);
+      if(v !== undefined) out[k] = v;
+    });
+    return out;
+  }
+  // Date, string, bool, number ok
+  return value;
+}
 async function fbSaveSagaOrders(){
   const root = fbUserPath();
   if(!root){
@@ -1440,13 +1459,14 @@ async function fbSaveSagaOrders(){
     console.warn('fbSaveSagaOrders: nenhuma ordem local para enviar');
     return false;
   }
-  const payload = {
+  const payload = fbSanitize({
     orders: orders,
     meta: state.sagaOrdersMeta || {},
     savedAt: Date.now(),
-    orderCount: n,
-    updatedAt: firebase.firestore.FieldValue.serverTimestamp()
-  };
+    orderCount: n
+  });
+  // serverTimestamp separado (não passar pelo sanitize)
+  payload.updatedAt = firebase.firestore.FieldValue.serverTimestamp();
   await root.collection('meta').doc('sagaOrders').set(payload);
   try{ await storeSet('saga-orders-savedAt', payload.savedAt); }catch(_){}
   console.log('[fb] sagaOrders salvas:', n, Object.keys(orders));
@@ -4474,9 +4494,9 @@ function sagaOrdersImportFile(file){
           event: order.event,
           importedAt: Date.now(),
           issueCount: order.issueCount || (order.issues||[]).length,
-          ownedCount: order.ownedCount,
-          missingCount: order.missingCount,
-          fileName: file && file.name
+          ownedCount: (order.ownedCount != null ? order.ownedCount : 0),
+          missingCount: (order.missingCount != null ? order.missingCount : 0),
+          fileName: (file && file.name) ? file.name : ''
         };
         await sagaOrdersSaveLocal();
         try{ await storeSet('saga-orders-savedAt', Date.now()); }catch(_){}
