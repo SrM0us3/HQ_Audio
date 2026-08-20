@@ -4492,10 +4492,35 @@ function normSagaName(s){
 }
 function normSeriesKey(s){
   let t = normSagaName(s);
+  // & e "and" equivalem (Atom & Hawkman ≈ Atom and Hawkman)
+  t = t.replace(/\band\b/g, ' ');
   t = t.replace(/^the\s+/, '');
   t = t.replace(/\bvol(?:ume)?\s*\d+\b/g, ' ');
   t = t.replace(/\bv\d+\b/g, ' ');
+  t = t.replace(/\b(of|vs|versus)\b/g, ' ');
   return t.replace(/\s+/g, ' ').trim();
+}
+/** Tokens significativos da série (para match flexível). */
+function catalogSeriesTokens(s){
+  const t = normSeriesKey(s);
+  if(!t) return [];
+  return t.split(' ').filter(w => w.length >= 2);
+}
+/** Duas séries “parecem” a mesma? */
+function catalogSeriesLooseEqual(a, b){
+  const ka = normSeriesKey(a);
+  const kb = normSeriesKey(b);
+  if(!ka || !kb) return false;
+  if(ka === kb) return true;
+  if(ka.indexOf(kb) >= 0 || kb.indexOf(ka) >= 0) return true;
+  const ta = catalogSeriesTokens(a);
+  const tb = catalogSeriesTokens(b);
+  if(!ta.length || !tb.length) return false;
+  // todos os tokens da menor estão na maior
+  const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
+  if(small.length < 1) return false;
+  const hit = small.filter(w => big.indexOf(w) >= 0).length;
+  return hit >= small.length && hit >= 1;
 }
 
 
@@ -4780,24 +4805,39 @@ function catalogMatchIssueToBook(iss, byId, byKey){
   for(let i=0;i<candidates.length;i++){
     if(byKey[candidates[i]]) found = catalogPreferBook(found, byKey[candidates[i]]);
   }
-  // fuzzy
+  // fuzzy: número igual + série aproximada (and/&/The)
   const num = catalogNormNum(iss.number != null ? iss.number : (disp.match(/#\s*(\d+)/)||[])[1]);
-  const skeys = [normSeriesKey(iss.series||''), normSeriesKey(iss.series_name||''), normSeriesKey(disp.split('#')[0]||'')].filter(Boolean);
-  if(num && skeys.length){
+  const seriesCands = [iss.series, iss.series_name, disp.split('#')[0]].filter(Boolean);
+  if(num && seriesCands.length){
     for(const k in byKey){
       if(!k || k.indexOf('|') < 0 || k.indexOf('file:') === 0) continue;
       const sp = k.lastIndexOf('|');
       const bs = k.slice(0, sp);
       const bn = k.slice(sp+1);
       if(bn !== String(num)) continue;
-      for(let j=0;j<skeys.length;j++){
-        const sk = skeys[j];
-        if(!sk || sk.length < 4) continue;
-        if(bs === sk || bs.indexOf(sk) >= 0 || sk.indexOf(bs) >= 0){
+      for(let j=0;j<seriesCands.length;j++){
+        if(catalogSeriesLooseEqual(seriesCands[j], bs)){
           found = catalogPreferBook(found, byKey[k]);
+          break;
+        }
+        // byKey guarda chave já normalizada — comparar com normSeriesKey do cand
+        if(catalogSeriesLooseEqual(normSeriesKey(seriesCands[j]), bs)){
+          found = catalogPreferBook(found, byKey[k]);
+          break;
         }
       }
     }
+  }
+  // varrer livros por id se ainda não achou (chaves podem não cobrir todas as variantes)
+  if(!found && num && seriesCands.length && byId){
+    Object.keys(byId).forEach(id => {
+      const b = byId[id];
+      if(!b || catalogIsTpbBook(b)) return;
+      if(catalogNormNum(b.number) !== String(num)) return;
+      if(seriesCands.some(sc => catalogSeriesLooseEqual(sc, b.series||'') || catalogSeriesLooseEqual(sc, b.title||''))){
+        found = catalogPreferBook(found, b);
+      }
+    });
   }
   // se só achou TPB, tenta achar avulsa com mesmo series|#
   if(found && catalogIsTpbBook(found)){
