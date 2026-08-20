@@ -4517,10 +4517,38 @@ function catalogSeriesLooseEqual(a, b){
   const tb = catalogSeriesTokens(b);
   if(!ta.length || !tb.length) return false;
   // todos os tokens da menor estão na maior
+  // (ex.: "brightest day aftermath the search" ⊂ "… search for swamp thing")
   const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
-  if(small.length < 1) return false;
+  if(small.length < 2){
+    // 1 token só: exige igualdade quase total (evita match fraco)
+    return small.length === 1 && big.indexOf(small[0]) >= 0 && (ka === kb || ka.indexOf(kb)>=0 || kb.indexOf(ka)>=0);
+  }
   const hit = small.filter(w => big.indexOf(w) >= 0).length;
-  return hit >= small.length && hit >= 1;
+  // exige quase todos os tokens da menor (≥80% e pelo menos 2)
+  return hit >= Math.max(2, Math.ceil(small.length * 0.8));
+}
+/** Extra: gera chaves alternativas encurtando subtítulo após ":" ou "Aftermath" */
+function catalogIssueKeysExpanded(series, number){
+  const keys = catalogIssueKeys(series, number);
+  const raw = String(series || '');
+  const variants = [raw];
+  // Brightest Day Aftermath: The Search → também "… The Search for Swamp Thing" será batido pelo loose equal;
+  // aqui geramos prefixos: antes de ":", e "… Aftermath"
+  if(raw.indexOf(':') >= 0){
+    variants.push(raw.split(':')[0]);
+    variants.push(raw.replace(/:.*$/, '').trim());
+  }
+  // remove "for X" no fim (Search for Swamp Thing → Search)
+  variants.push(raw.replace(/\s+for\s+.+$/i, '').trim());
+  // underscore como espaço
+  variants.push(raw.replace(/_/g, ' '));
+  variants.forEach(v => {
+    if(!v) return;
+    catalogIssueKeys(v, number).forEach(k => {
+      if(keys.indexOf(k) < 0) keys.push(k);
+    });
+  });
+  return keys;
 }
 
 
@@ -4794,13 +4822,17 @@ function catalogMatchIssueToBook(iss, byId, byKey){
     else if(m.id && byId[m.id]) found = byId[m.id];
   }
   const candidates = [];
-  catalogIssueKeys(iss.series, iss.number).forEach(k => candidates.push(k));
-  if(iss.series_name) catalogIssueKeys(iss.series_name, iss.number).forEach(k => candidates.push(k));
+  const pushKeys = (series, number) => {
+    const fn = (typeof catalogIssueKeysExpanded === 'function') ? catalogIssueKeysExpanded : catalogIssueKeys;
+    fn(series, number).forEach(k => { if(candidates.indexOf(k) < 0) candidates.push(k); });
+  };
+  pushKeys(iss.series, iss.number);
+  if(iss.series_name) pushKeys(iss.series_name, iss.number);
   const disp = String(iss.display || iss.raw || '');
   if(disp){
     let mt = disp.match(/^(.+?)\s+#\s*(\d+(?:\.\d+)?)\b/);
     if(!mt) mt = disp.match(/^(.+?)\s+#?(\d+(?:\.\d+)?)\s*(?:\(|$)/);
-    if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(k => candidates.push(k));
+    if(mt) pushKeys(mt[1], mt[2]);
   }
   for(let i=0;i<candidates.length;i++){
     if(byKey[candidates[i]]) found = catalogPreferBook(found, byKey[candidates[i]]);
@@ -4882,13 +4914,16 @@ function catalogIndexBooksForOrder(books){
       if(!k) return;
       byKey[k] = catalogPreferBook(byKey[k], b);
     };
-    catalogIssueKeys(b.series, b.number).forEach(put);
-    if(b.title) catalogIssueKeys(b.title, b.number).forEach(put);
+    const exp = (typeof catalogIssueKeysExpanded === 'function') ? catalogIssueKeysExpanded : catalogIssueKeys;
+    exp(b.series, b.number).forEach(put);
+    if(b.title) exp(b.title, b.number).forEach(put);
     const fn = String(b.filename || b.stem || '').replace(/\.cbz$/i,'');
     if(fn){
       put('file:' + normSagaName(fn));
-      const mt = fn.match(/^(.+?)\s+#(\d+)/) || fn.match(/^(.+?)\s+(\d{1,4})\s*(?:\(|$)/);
-      if(mt) catalogIssueKeys(mt[1], mt[2]).forEach(put);
+      // Aftermath_ The Search for Swamp Thing V2011 #1
+      const mt = fn.match(/^(.+?)\s+#(\d+)/) || fn.match(/^(.+?)\s+V\d{4}\s+#(\d+)/i)
+        || fn.match(/^(.+?)\s+(\d{1,4})\s*(?:\(|$)/);
+      if(mt) exp(mt[1].replace(/_/g,' '), mt[2]).forEach(put);
     }
   });
   return { byId, byKey };
