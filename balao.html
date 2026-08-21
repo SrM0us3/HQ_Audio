@@ -4982,8 +4982,9 @@ function catalogIndexBooksForOrder(books){
 function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
-  const key = normSagaName(eventName);
-  const order = state.sagaOrders[key];
+  const order = (typeof catalogGetSagaOrder === 'function')
+    ? catalogGetSagaOrder(eventName)
+    : (state.sagaOrders && state.sagaOrders[normSagaName(eventName)]);
   if(!order || !Array.isArray(order.issues) || !order.issues.length){
     // sem ordem CBRO: deduplica por série+# e esconde TPB se já existir a edição avulsa
     const { byKey } = catalogIndexBooksForOrder(books);
@@ -5399,26 +5400,43 @@ function catalogOwnedStats(books, opts){
 function catalogStatsLabel(st, kind){
   if(!st) return '';
   kind = kind || 'eds';
-  if(st.complete) return st.owned + ' ' + kind + ' · completo';
+  if(st.complete) return st.total + ' ' + kind + ' · completo';
   if(st.total != null){
+    // "52/90 · faltam 38" (tenho/na ordem)
     return st.owned + '/' + st.total + ' ' + kind + (st.missing ? (' · faltam ' + st.missing) : '');
   }
   return st.owned + ' ' + kind;
 }
 /** Stats de saga com ordem CBRO */
+/** Resolve ordem CBRO pelo nome da saga (aliases). */
+function catalogGetSagaOrder(name){
+  if(!state.sagaOrders) return null;
+  const key = normSagaName(name || '');
+  if(state.sagaOrders[key]) return state.sagaOrders[key];
+  // procura por event / aliases dentro das ordens
+  for(const k of Object.keys(state.sagaOrders)){
+    const ord = state.sagaOrders[k];
+    if(!ord) continue;
+    if(normSagaName(ord.event || '') === key) return ord;
+    const als = ord.eventAliases || ord.aliases || [];
+    if(als.some(a => normSagaName(a) === key)) return ord;
+  }
+  return null;
+}
 function catalogSagaOwnedStats(sg){
   const name = (sg && sg.name) || '';
-  const key = typeof normSagaName === 'function' ? normSagaName(name) : name;
-  const ord = state.sagaOrders && state.sagaOrders[key];
+  const ord = catalogGetSagaOrder(name);
   if(ord && Array.isArray(ord.issues) && ord.issues.length){
     const list = (typeof catalogBuildSagaList === 'function')
       ? catalogBuildSagaList(sg, 'AlternateNumber')
       : (sg.books || []);
+    // owned = slots da ORDEM que acharam livro (não inflar com books soltos)
     const owned = list.filter(b => b && !b._isPlaceholder).length;
     const total = ord.issues.length;
     const missing = Math.max(0, total - owned);
-    return { owned: owned, total: total, missing: missing, complete: missing === 0 && owned > 0 };
+    return { owned: owned, total: total, missing: missing, complete: missing === 0 && owned > 0, fromOrder: true };
   }
+  // sem ordem: só o que está no catálogo com series_group
   return catalogOwnedStats(sg.books || [], {});
 }
 
