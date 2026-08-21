@@ -6673,12 +6673,22 @@ function renderJsonCatalog(){
       wrap.appendChild(inp);
     });
     const labS = document.createElement('label');
-    labS.textContent = 'Sinopse';
+    labS.textContent = 'Sinopse (Sumário)';
     const ta = document.createElement('textarea');
     ta.value = book.summary || '';
     inputs.summary = ta;
     wrap.appendChild(labS);
     wrap.appendChild(ta);
+
+    const labR = document.createElement('label');
+    labR.textContent = 'Crítica (original / Review)';
+    labR.style.cssText = 'display:block;margin-top:10px;font-size:12px;opacity:.85;';
+    const taR = document.createElement('textarea');
+    taR.value = book.review || book.Review || book.critica || '';
+    taR.rows = 4;
+    inputs.review = taR;
+    wrap.appendChild(labR);
+    wrap.appendChild(taR);
     const trBtn = document.createElement('button');
     trBtn.type = 'button';
     trBtn.textContent = 'Traduzir sinopse (PT)';
@@ -6688,13 +6698,23 @@ function renderJsonCatalog(){
       if(!src){ toast('Sinopse vazia', 2000); return; }
       trBtn.disabled = true; trBtn.textContent = 'Traduzindo…';
       try{
-        // MyMemory free API (limite diário)
+        // Original (inglês) → Crítica/Review; tradução → Sumário/Summary
         const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(src.slice(0, 450)) + '&langpair=en|pt';
         const r = await fetch(url);
         const j = await r.json();
         const out = j && j.responseData && j.responseData.translatedText;
-        if(out){ ta.value = out; toast('Sinopse traduzida — revise e salve', 3500); }
-        else toast('Não foi possível traduzir', 3000);
+        if(out){
+          // guarda original em Crítica se o campo existir na UI
+          if(inputs.review){
+            const curRev = (inputs.review.value || '').trim();
+            // não sobrescreve crítica se já tiver texto diferente do sumário
+            if(!curRev || curRev === src) inputs.review.value = src;
+          } else {
+            book._pendingReview = src;
+          }
+          ta.value = out;
+          toast('PT no Sumário · original na Crítica — revise e salve', 4000);
+        } else toast('Não foi possível traduzir', 3000);
       }catch(e){
         console.warn(e);
         toast('Falha na tradução (rede/API)', 3000);
