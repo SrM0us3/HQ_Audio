@@ -4922,10 +4922,13 @@ function catalogMatchIssueToBook(iss, byId, byKey){
       const keys = catalogIssueKeys(b.series, b.number);
       const hit = candidates.some(c => keys.indexOf(c) >= 0);
       if(hit) better = catalogPreferBook(better, b);
-      // fuzzy series
-      if(num && skeys.some(sk => {
+      // fuzzy series (seriesCands no lugar do antigo skeys)
+      if(num && seriesCands && seriesCands.some(sc => {
+        const sk = normSeriesKey(sc||'');
         const bs = normSeriesKey(b.series||'');
-        return bs && sk && (bs === sk || bs.indexOf(sk)>=0 || sk.indexOf(bs)>=0) && catalogNormNum(b.number) === String(num);
+        if(!sk || !bs) return false;
+        if(sk.split(' ').filter(Boolean).length <= 1) return sk === bs && catalogNormNum(b.number) === String(num);
+        return catalogSeriesLooseEqual(sc, b.series||'') && catalogNormNum(b.number) === String(num);
       })) better = catalogPreferBook(better, b);
     });
     if(better) found = better;
