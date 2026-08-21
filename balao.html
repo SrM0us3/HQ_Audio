@@ -4982,9 +4982,10 @@ function catalogIndexBooksForOrder(books){
 function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
+  const key = normSagaName(eventName);
   const order = (typeof catalogGetSagaOrder === 'function')
     ? catalogGetSagaOrder(eventName)
-    : (state.sagaOrders && state.sagaOrders[normSagaName(eventName)]);
+    : (state.sagaOrders && state.sagaOrders[key]);
   if(!order || !Array.isArray(order.issues) || !order.issues.length){
     // sem ordem CBRO: deduplica por série+# e esconde TPB se já existir a edição avulsa
     const { byKey } = catalogIndexBooksForOrder(books);
