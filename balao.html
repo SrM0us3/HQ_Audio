@@ -4732,7 +4732,7 @@ async function catalogApplySagaOrderToCatalog(order, opts){
   }
 
   await storeSet('catalog-overrides', overridesAll);
-  try{ if(typeof catalogRebuildSagas === 'function') catalogRebuildSagas(state.jsonCatalog); }catch(_){}
+  try{ catalogMarkDirty(); if(typeof catalogRebuildSagas === 'function') catalogRebuildSagas(state.jsonCatalog, { force: true }); }catch(_){}
   try{ await catalogSaveLocal(state.jsonCatalog); }catch(e){ console.warn(e); }
 
   // Firebase overrides
@@ -5041,7 +5041,16 @@ function catalogBuildSagaList(sg, orderMode){
   });
   pool = Object.keys(bestByKey).map(k => bestByKey[k]);
 
-  const { byId, byKey } = catalogIndexBooksForOrder(pool);
+  // índice global em cache (6k livros) — não recria a cada abertura de saga
+  let byId, byKey;
+  try{
+    const idx = (typeof catalogGetOrderIndex === 'function') ? catalogGetOrderIndex() : null;
+    if(idx){ byId = idx.byId; byKey = idx.byKey; }
+  }catch(_){}
+  if(!byId || !byKey){
+    const indexed = catalogIndexBooksForOrder(pool);
+    byId = indexed.byId; byKey = indexed.byKey;
+  }
   const out = [];
   const used = new Set();
   order.issues.forEach(iss => {
@@ -5104,6 +5113,7 @@ function catalogBuildSagaList(sg, orderMode){
 
 async function catalogSaveLocal(data){
   state.jsonCatalog = data;
+  try{ catalogMarkDirty(); }catch(_){}
   // catalogo pode ser grande demais pro localStorage → IndexedDB
   const ok = await idbPutCatalog(data, await storeGet('catalogo-json-meta'));
   if(!ok){
@@ -5383,6 +5393,65 @@ function catalogExpectedTotal(books){
   return best > 0 ? best : null;
 }
 /** Stats de posse: tenho / total / faltam / completo */
+
+/** Total esperado da série: campo Count do ComicInfo (maior entre os livros). */
+function catalogSeriesCountTotal(books){
+  let max = 0;
+  (books || []).forEach(b => {
+    if(!b || b._isPlaceholder) return;
+    const c = parseInt(b.count || b.Count || b.total || 0, 10);
+    if(c > max) max = c;
+  });
+  return max > 0 ? max : null;
+}
+/** Preenche buracos na sequência de Number com placeholders NÃO TENHO. */
+function catalogFillNumberGaps(books){
+  const list = (books || []).filter(b => b && !b._isPlaceholder);
+  if(!list.length) return books || [];
+  const byNum = {};
+  list.forEach(b => {
+    const n = parseFloat(String(b.number != null ? b.number : '').replace(',', '.'));
+    if(!isFinite(n) || n <= 0) return;
+    const k = String(n);
+    if(!byNum[k] || catalogPreferBook(byNum[k], b) === b) byNum[k] = b;
+  });
+  const nums = Object.keys(byNum).map(Number).filter(n => n === Math.floor(n)).sort((a,b)=>a-b);
+  if(!nums.length) return catalogSortBooks(list, 'Number');
+  let end = nums[nums.length - 1];
+  const total = catalogSeriesCountTotal(list);
+  if(total && total > end) end = total;
+  // não inventar milhares de placeholders se números forem esparsos (ex. 1000+)
+  if(end - nums[0] > 500 && !total) {
+    // só preenche buracos entre min e max existentes, limitando
+    end = nums[nums.length - 1];
+  }
+  const start = Math.max(1, Math.floor(nums[0]));
+  const out = [];
+  const seriesName = list[0].series || '';
+  for(let n = start; n <= end; n++){
+    const k = String(n);
+    if(byNum[k]) out.push(byNum[k]);
+    else {
+      out.push({
+        id: 'missing-series:' + seriesName + ':' + n,
+        series: seriesName,
+        number: String(n),
+        title: seriesName + ' #' + n,
+        _isPlaceholder: true,
+        _sagaOrderStatus: 'missing'
+      });
+    }
+  }
+  // anexar não-numéricos / TPB no fim
+  list.forEach(b => {
+    const n = parseFloat(String(b.number != null ? b.number : '').replace(',', '.'));
+    if(!isFinite(n) || n !== Math.floor(n) || n < start || n > end){
+      if(out.indexOf(b) < 0) out.push(b);
+    }
+  });
+  return out;
+}
+
 function catalogOwnedStats(books, opts){
   opts = opts || {};
   const list = (books || []).filter(b => b && !b._isPlaceholder);
@@ -5697,7 +5766,7 @@ async function catalogSaveBookOverride(book, fields, opts){
   await storeSet(key, all);
   Object.keys(clean).forEach(k=>{ book[k] = clean[k]; });
   if(clean.series_group != null || clean.seriesGroup != null){
-    try{ if(state.jsonCatalog) catalogRebuildSagas(state.jsonCatalog); }catch(_){}
+    try{ catalogMarkDirty(); if(state.jsonCatalog) catalogRebuildSagas(state.jsonCatalog, { force: true }); }catch(_){}
   }
   if(state.fb && state.fb.user){
     try{ await fbSaveOverride(id, clean); }catch(e){ console.warn('fb override', e); }
@@ -5723,7 +5792,7 @@ async function catalogSaveBooksOverride(books, fields, opts){
     n++;
   });
   await storeSet('catalog-overrides', all);
-  try{ if(state.jsonCatalog) catalogRebuildSagas(state.jsonCatalog); }catch(_){}
+  try{ catalogMarkDirty(); if(state.jsonCatalog) catalogRebuildSagas(state.jsonCatalog, { force: true }); }catch(_){}
   if(state.fb && state.fb.user){
     try{
       const slice = {};
@@ -5761,7 +5830,7 @@ async function catalogBulkFindReplace(books, field, findStr, replaceStr, opts){
     n++;
   });
   await storeSet('catalog-overrides', all);
-  try{ if(state.jsonCatalog) catalogRebuildSagas(state.jsonCatalog); }catch(_){}
+  try{ catalogMarkDirty(); if(state.jsonCatalog) catalogRebuildSagas(state.jsonCatalog, { force: true }); }catch(_){}
   if(n && state.fb && state.fb.user){
     try{
       const slice = {};
@@ -5800,8 +5869,13 @@ async function catalogApplyOverrides(data){
   return data;
 }
 /** Remonta a lista de sagas a partir do series_group atual dos livros (após overrides / correções). */
-function catalogRebuildSagas(data){
+function catalogRebuildSagas(data, opts){
+  opts = opts || {};
   if(!data) return data;
+  // evita remontar sagas/coleções a cada clique em Sagas/Coleções
+  if(!opts.force && state._catalogCache && state._catalogCache.sagasReady && data === state.jsonCatalog){
+    return data;
+  }
   const byPub = {}; // publisher -> map sagaName -> books[]
   const idSeen = {}; // per saga: avoid dup books
 
@@ -5891,6 +5965,11 @@ function catalogRebuildSagas(data){
     p.sagaCount = p.sagas.length;
     p.collectionCount = p.collections.length;
   });
+  try{
+    state._catalogCache = state._catalogCache || {};
+    state._catalogCache.sagasReady = true;
+    state._catalogCache.dirty = false;
+  }catch(_){}
 
   // sincroniza state.catalogNav.pub se estiver apontando para publisher antigo
   try{
@@ -5913,14 +5992,29 @@ function catalogRebuildSagas(data){
   return data;
 }
 /** Lista todas as edições do catálogo em memória */
+/** Invalida caches pesados do catálogo (após load / override / import). */
+function catalogMarkDirty(){
+  state._catalogCache = state._catalogCache || {};
+  state._catalogCache.dirty = true;
+  state._catalogCache.allBooks = null;
+  state._catalogCache.orderIndex = null;
+  state._catalogCache.sagasReady = false;
+}
 function catalogAllBooks(data){
   data = data || state.jsonCatalog;
   const out = [];
   if(!data) return out;
+  // cache: 6k+ livros — não remontar a cada clique
+  try{
+    if(!data && state.jsonCatalog) data = state.jsonCatalog;
+    if(data === state.jsonCatalog && state._catalogCache && state._catalogCache.allBooks && !state._catalogCache.dirty){
+      return state._catalogCache.allBooks;
+    }
+  }catch(_){}
   const seen = new Set();
   const add = (b)=>{
     if(!b) return;
-    const id = catalogBookOverrideId(b);
+    const id = (typeof catalogBookOverrideId === 'function') ? catalogBookOverrideId(b) : (b.id || b.filename);
     if(id && seen.has(id)) return;
     if(id) seen.add(id);
     out.push(b);
@@ -5929,8 +6023,29 @@ function catalogAllBooks(data){
   (data.publishers || []).forEach(p => {
     (p.series || []).forEach(s => (s.books||[]).forEach(add));
     (p.sagas || []).forEach(sg => (sg.books||[]).forEach(add));
+    (p.collections || []).forEach(cg => (cg.books||[]).forEach(add));
   });
+  try{
+    if(data === state.jsonCatalog){
+      state._catalogCache = state._catalogCache || {};
+      state._catalogCache.allBooks = out;
+      state._catalogCache.dirty = false;
+    }
+  }catch(_){}
   return out;
+}
+/** Índice global série|# → livro (reusa entre sagas até dirty). */
+function catalogGetOrderIndex(){
+  state._catalogCache = state._catalogCache || {};
+  if(state._catalogCache.orderIndex && !state._catalogCache.dirty){
+    return state._catalogCache.orderIndex;
+  }
+  const books = catalogAllBooks(state.jsonCatalog);
+  const idx = (typeof catalogIndexBooksForOrder === 'function')
+    ? catalogIndexBooksForOrder(books)
+    : { byId: {}, byKey: {} };
+  state._catalogCache.orderIndex = idx;
+  return idx;
 }
 async function catalogPushOverridesToDrive(opts){
   opts = opts || {};
@@ -6564,6 +6679,29 @@ function renderJsonCatalog(){
     inputs.summary = ta;
     wrap.appendChild(labS);
     wrap.appendChild(ta);
+    const trBtn = document.createElement('button');
+    trBtn.type = 'button';
+    trBtn.textContent = 'Traduzir sinopse (PT)';
+    trBtn.style.cssText = 'margin-top:8px;padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--panel-2);color:var(--text);font-family:inherit;cursor:pointer;width:100%;';
+    trBtn.onclick = async () => {
+      const src = (ta.value || '').trim();
+      if(!src){ toast('Sinopse vazia', 2000); return; }
+      trBtn.disabled = true; trBtn.textContent = 'Traduzindo…';
+      try{
+        // MyMemory free API (limite diário)
+        const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(src.slice(0, 450)) + '&langpair=en|pt';
+        const r = await fetch(url);
+        const j = await r.json();
+        const out = j && j.responseData && j.responseData.translatedText;
+        if(out){ ta.value = out; toast('Sinopse traduzida — revise e salve', 3500); }
+        else toast('Não foi possível traduzir', 3000);
+      }catch(e){
+        console.warn(e);
+        toast('Falha na tradução (rede/API)', 3000);
+      }
+      trBtn.disabled = false; trBtn.textContent = 'Traduzir sinopse (PT)';
+    };
+    wrap.appendChild(trBtn);
 
     const actions = document.createElement('div');
     actions.style.cssText = 'display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;';
@@ -6800,7 +6938,12 @@ function renderJsonCatalog(){
 
     const arcKey = (b) => String(b.story_arc || '').trim();
     const volKey = (b) => String(b.volume || '').trim();
-    const ordered = catalogSortBooks(s.books || [], 'Number');
+    const ordered = catalogFillNumberGaps(catalogSortBooks(s.books || [], 'Number'));
+    try{
+      const tot = catalogSeriesCountTotal(s.books || []);
+      const owned = (s.books || []).filter(b => b && !b._isPlaceholder).length;
+      if(tot) setCatalogMetaLine(bits, owned + '/' + tot + ' eds' + (tot > owned ? (' · faltam ' + (tot-owned)) : ' · completo') + ((s.arcs||[]).length ? (' · ' + (s.arcs||[]).length + ' arcos') : ''));
+    }catch(_){}
 
     // grupos por volume (ordem já Volume→Number)
     const volGroups = [];
