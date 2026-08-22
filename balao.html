@@ -4986,6 +4986,16 @@ function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
   const key = normSagaName(eventName);
+  // cache por saga até catalogMarkDirty
+  try{
+    state._catalogCache = state._catalogCache || {};
+    state._catalogCache.sagaLists = state._catalogCache.sagaLists || {};
+    const ck = key + '|' + (orderMode || 'AlternateNumber');
+    if(!state._catalogCache.dirty && state._catalogCache.sagaLists[ck]){
+      return state._catalogCache.sagaLists[ck];
+    }
+  }catch(_){}
+
   const order = (typeof catalogGetSagaOrder === 'function')
     ? catalogGetSagaOrder(eventName)
     : (state.sagaOrders && state.sagaOrders[key]);
@@ -5105,10 +5115,17 @@ function catalogBuildSagaList(sg, orderMode){
     }
   });
   // NÃO acrescenta "extras" no fim — isso repetia números (1, 46, 47…) e inflava 80 → 85+
+  let result = out;
   if(orderMode === 'Number'){
-    return catalogSortBooks(out, 'Number');
+    result = catalogSortBooks(out, 'Number');
   }
-  return out;
+  try{
+    state._catalogCache = state._catalogCache || {};
+    state._catalogCache.sagaLists = state._catalogCache.sagaLists || {};
+    const ck = key + '|' + (orderMode || 'AlternateNumber');
+    state._catalogCache.sagaLists[ck] = result;
+  }catch(_){}
+  return result;
 }
 
 async function catalogSaveLocal(data){
@@ -5496,20 +5513,32 @@ function catalogGetSagaOrder(name){
   }
   return null;
 }
-function catalogSagaOwnedStats(sg){
+function catalogSagaOwnedStats(sg, opts){
+  opts = opts || {};
   const name = (sg && sg.name) || '';
-  const ord = catalogGetSagaOrder(name);
+  const ord = (typeof catalogGetSagaOrder === 'function') ? catalogGetSagaOrder(name) : null;
+  // LISTA de sagas: estatística LEVE (não roda match CBRO em cada card)
+  if(!opts.fullMatch){
+    const owned = (sg.books || []).filter(b => b && !b._isPlaceholder).length;
+    if(ord && Array.isArray(ord.issues) && ord.issues.length){
+      const total = ord.issues.length;
+      const missing = Math.max(0, total - owned);
+      // owned pode ser > total se series_group tiver extras; limita na label
+      const o = Math.min(owned, total);
+      return { owned: o, total: total, missing: Math.max(0, total - o), complete: o >= total && total > 0, fromOrder: true, light: true };
+    }
+    return catalogOwnedStats(sg.books || [], {});
+  }
+  // DETALHE da saga: match completo (com cache)
   if(ord && Array.isArray(ord.issues) && ord.issues.length){
     const list = (typeof catalogBuildSagaList === 'function')
       ? catalogBuildSagaList(sg, 'AlternateNumber')
       : (sg.books || []);
-    // owned = slots da ORDEM que acharam livro (não inflar com books soltos)
     const owned = list.filter(b => b && !b._isPlaceholder).length;
     const total = ord.issues.length;
     const missing = Math.max(0, total - owned);
     return { owned: owned, total: total, missing: missing, complete: missing === 0 && owned > 0, fromOrder: true };
   }
-  // sem ordem: só o que está no catálogo com series_group
   return catalogOwnedStats(sg.books || [], {});
 }
 
@@ -5999,6 +6028,7 @@ function catalogMarkDirty(){
   state._catalogCache.allBooks = null;
   state._catalogCache.orderIndex = null;
   state._catalogCache.sagasReady = false;
+  state._catalogCache.sagaLists = {};
 }
 function catalogAllBooks(data){
   data = data || state.jsonCatalog;
@@ -7069,7 +7099,7 @@ function renderJsonCatalog(){
     const sg = nav.saga;
     // Sagas: sempre ordem de leitura (CBRO / alternate_number)
     const order = 'AlternateNumber';
-    const hasCbro = !!(state.sagaOrders[normSagaName(sg.name||'')]);
+    const hasCbro = !!(typeof catalogGetSagaOrder === 'function' && catalogGetSagaOrder(sg.name||''));
     const list = catalogBuildSagaList(sg, order);
     const ownedN = list.filter(b => !b._isPlaceholder).length;
     const missN = list.filter(b => b._isPlaceholder).length;
