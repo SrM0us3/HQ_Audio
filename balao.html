@@ -6698,26 +6698,40 @@ function renderJsonCatalog(){
       if(!src){ toast('Sinopse vazia', 2000); return; }
       trBtn.disabled = true; trBtn.textContent = 'Traduzindo…';
       try{
-        // Original (inglês) → Crítica/Review; tradução → Sumário/Summary
-        const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(src.slice(0, 450)) + '&langpair=en|pt';
-        const r = await fetch(url);
-        const j = await r.json();
-        const out = j && j.responseData && j.responseData.translatedText;
-        if(out){
-          // guarda original em Crítica se o campo existir na UI
-          if(inputs.review){
-            const curRev = (inputs.review.value || '').trim();
-            // não sobrescreve crítica se já tiver texto diferente do sumário
-            if(!curRev || curRev === src) inputs.review.value = src;
-          } else {
-            book._pendingReview = src;
-          }
-          ta.value = out;
-          toast('PT no Sumário · original na Crítica — revise e salve', 4000);
-        } else toast('Não foi possível traduzir', 3000);
+        // MyMemory ~500 chars por request — divide o texto e junta
+        const chunkSize = 400;
+        const chunks = [];
+        let rest = src;
+        while(rest.length){
+          if(rest.length <= chunkSize){ chunks.push(rest); break; }
+          let cut = rest.lastIndexOf(' ', chunkSize);
+          if(cut < chunkSize * 0.5) cut = chunkSize;
+          chunks.push(rest.slice(0, cut));
+          rest = rest.slice(cut).trim();
+        }
+        const parts = [];
+        for(let i = 0; i < chunks.length; i++){
+          trBtn.textContent = 'Traduzindo… ' + (i+1) + '/' + chunks.length;
+          const url = 'https://api.mymemory.translated.net/get?q=' + encodeURIComponent(chunks[i]) + '&langpair=en|pt';
+          const r = await fetch(url);
+          const j = await r.json();
+          const piece = j && j.responseData && j.responseData.translatedText;
+          if(!piece) throw new Error('chunk ' + (i+1));
+          parts.push(piece);
+          if(i < chunks.length - 1) await new Promise(res => setTimeout(res, 300));
+        }
+        const out = parts.join(' ').trim();
+        if(inputs.review){
+          const curRev = (inputs.review.value || '').trim();
+          if(!curRev || curRev === src) inputs.review.value = src;
+        } else {
+          book._pendingReview = src;
+        }
+        ta.value = out;
+        toast('PT no Sumário · original na Crítica — revise e salve', 4000);
       }catch(e){
         console.warn(e);
-        toast('Falha na tradução (rede/API)', 3000);
+        toast('Falha na tradução (rede/API ou limite)', 3500);
       }
       trBtn.disabled = false; trBtn.textContent = 'Traduzir sinopse (PT)';
     };
