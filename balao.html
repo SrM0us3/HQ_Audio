@@ -36,7 +36,7 @@ window.addEventListener('unhandledrejection', function(ev){
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<title>Balão — quadrinho com voz</title>
+<title>Balão — leitor (HQ + áudio)</title>
 <link rel="icon" type="image/svg+xml" href="icons/icon-hqs.svg">
 <link rel="apple-touch-icon" href="icons/icon-hqs.svg">
 <meta name="theme-color" content="#e4402c">
@@ -147,7 +147,7 @@ window.addEventListener('unhandledrejection', function(ev){
 
   .nav-tabs{display:none;} /* abas foram para a topbar */
   .nav-tabs button{display:none;}
-  #screen-catalog{flex:1;overflow-y:auto;padding:18px;display:none;}
+  #screen-catalog,#catalogSearchTop,#topbarRow2 .top-search{display:none!important;}
   #screen-catalog.active{display:block;}
   #screen-catalog #catalogSearch{display:none;} /* busca foi para a topbar */
   .komga-cfg{
@@ -596,16 +596,16 @@ window.addEventListener('unhandledrejection', function(ev){
 <script src="https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore-compat.js"></script>
 </head>
 <body>
+<script>window.__BALAO_LEITOR_ONLY__=true;window.__BALAO_VERSION__="leitor-1.0.0-2026-08-23";</script>
 <div id="app">
 
   <div class="topbar">
     <div class="topbar-row1">
       <button class="iconbtn" id="btnHome" type="button" title="Atualizar o app">🏠</button>
-      <div class="brand">BALÃO</div>
+      <div class="brand">BALÃO</div><span style="font-size:10px;opacity:.7;margin-left:4px">Leitor</span>
       <div class="top-tabs" id="topTabs">
         <button type="button" data-tab="library" id="tabLibrary" class="on">Biblioteca</button>
-        <button type="button" data-tab="catalog" id="tabCatalog">Catálogo</button>
-      </div>
+        </div>
       <div class="topbar-actions">
         <button class="iconbtn" id="btnDownload" title="Baixar CBZ com marcações" style="display:none">⬇</button>
         <button class="iconbtn" id="btnSettings" type="button" title="Configurações" onclick="try{if(window.__openSettings){window.__openSettings();}else{alert('Balão: recarregue a página com cache limpo (versão antiga).');}}catch(e){alert('Erro ⚙: '+e);}return false;">⚙</button>
@@ -626,8 +626,7 @@ window.addEventListener('unhandledrejection', function(ev){
   <div id="screen-library" class="active">
     <div class="nav-tabs" id="mainTabs">
       <button type="button" class="on" data-tab="library" id="tabLibrary">Biblioteca Balão</button>
-      <button type="button" data-tab="catalog" id="tabCatalog">Catálogo</button>
-    </div>
+      </div>
     <div class="drive-bar" id="driveBar">
       <div class="drive-status" id="driveStatus">Drive: desconectado</div>
       <button type="button" class="primary" id="btnDriveLogin">Entrar no Google</button>
@@ -647,8 +646,7 @@ window.addEventListener('unhandledrejection', function(ev){
   <div id="screen-catalog">
     <div class="nav-tabs">
       <button type="button" data-tab="library" id="tabLibrary2">Biblioteca Balão</button>
-      <button type="button" class="on" data-tab="catalog" id="tabCatalog2">Catálogo</button>
-    </div>
+      </div>
     <div class="catalog-meta" id="jsonCatalogStatus" style="margin:0 0 8px;font-size:12px;color:var(--text-dim)">Catálogo: nenhum JSON. Configure em ⚙.</div>
     <!-- botões de sync ficam em ⚙ Configurações; inputs hidden ficam aqui -->
     <div id="jsonCatalogCfg" style="display:none">
@@ -6600,7 +6598,7 @@ function setCatalogMetaLine(pathBits, countText){
   el.appendChild(right);
 }
 
-function renderJsonCatalog(){
+function renderJsonCatalog(){ if(window.__BALAO_LEITOR_ONLY__) return;
   const grid = $('#catalogGrid');
   const countEl = $('#catalogCount');
   const status = $('#jsonCatalogStatus');
@@ -8273,10 +8271,10 @@ async function komgaLoadCover(seriesId, el){
   }
 }
 
-function goCatalog(opts){
+function goCatalog(opts){ if(window.__BALAO_LEITOR_ONLY__){ try{goLibrary();}catch(e){} return; }
   opts = opts || {};
   try{ if(typeof stopPlay === 'function') stopPlay(); }catch(_){}
-  state.screen = 'catalog';
+  state.screen = window.__BALAO_LEITOR_ONLY__ ? 'library' : 'catalog';
   $('#screen-library').classList.remove('active');
   $('#screen-reader').classList.remove('active');
   const cat = $('#screen-catalog');
