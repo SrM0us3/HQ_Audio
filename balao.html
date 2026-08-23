@@ -5132,24 +5132,22 @@ function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
   const key = normSagaName(eventName);
-  // Editora da saga: do grupo de livros ou inferida pelo nome do publisher no nav
+  // Editora da saga (order ainda não existe aqui — só heurística + livros do grupo)
   let ctxPub = '';
   try{
     const sample = (books || []).find(b => b && (b.publisherGroup || b.publisher));
     if(sample) ctxPub = catalogBookPubGroup(sample);
-    if(!ctxPub && order && order.publisher) ctxPub = order.publisher;
-    // heurística pelo nome do evento
     if(!ctxPub){
       const en = (eventName || '').toLowerCase();
-      if(/civil war|secret invasion|infinity|house of m|annihilation|dark reign|fear itself/.test(en)) ctxPub = 'Marvel';
-      if(/blackest night|brightest day|flashpoint|convergence|crisis|infinite crisis|final crisis/.test(en)) ctxPub = 'DC';
+      if(/civil war|secret invasion|infinity|house of m|annihilation|dark reign|fear itself|secret wars|age of ultron|axis/.test(en)) ctxPub = 'Marvel';
+      if(/blackest night|brightest day|flashpoint|convergence|crisis|infinite crisis|final crisis|identity crisis|zero hour|final night/.test(en)) ctxPub = 'DC';
     }
   }catch(_){}
   // cache por saga (versão 2 = invalida cache antigo com match errado)
   try{
     state._catalogCache = state._catalogCache || {};
     state._catalogCache.sagaLists = state._catalogCache.sagaLists || {};
-    const ck = 'v2|' + key + '|' + (orderMode || 'AlternateNumber');
+    const ck = 'v3|' + key + '|' + (orderMode || 'AlternateNumber');
     if(!state._catalogCache.dirty && state._catalogCache.sagaLists[ck]){
       return state._catalogCache.sagaLists[ck];
     }
@@ -5160,6 +5158,10 @@ function catalogBuildSagaList(sg, orderMode){
   const order = (typeof catalogGetSagaOrder === 'function')
     ? catalogGetSagaOrder(eventName)
     : (state.sagaOrders && state.sagaOrders[key]);
+  try{
+    if(order && order.publisher) ctxPub = order.publisher;
+    else if(!ctxPub && order && order.publisherGroup) ctxPub = order.publisherGroup;
+  }catch(_){}
   if(!order || !Array.isArray(order.issues) || !order.issues.length){
     // sem ordem CBRO: deduplica por série+# e esconde TPB se já existir a edição avulsa
     const { byKey } = catalogIndexBooksForOrder(books);
@@ -5212,26 +5214,63 @@ function catalogBuildSagaList(sg, orderMode){
   });
   pool = Object.keys(bestByKey).map(k => bestByKey[k]);
 
-  // índice global em cache (6k livros) — não recria a cada abertura de saga
-  let byId, byKey;
+  // === PIPELINE DE MATCH (ordem fixa) ===
+  // 1) Editora  2) Ano do evento  3) Só então nome+# no que sobrou
+  let eventYear = (typeof catalogKnownEventYear === 'function') ? catalogKnownEventYear(eventName) : 0;
   try{
-    const idx = (typeof catalogGetOrderIndex === 'function') ? catalogGetOrderIndex() : null;
-    if(idx){ byId = idx.byId; byKey = idx.byKey; }
+    const years = (order.issues || []).map(ix => parseInt(ix.year||0,10)).filter(y => y > 1950 && y < 2100);
+    if(years.length){
+      years.sort((a,b)=>a-b);
+      const med = years[Math.floor(years.length/2)];
+      if(!eventYear) eventYear = med;
+      else if(Math.abs(med - eventYear) <= 2) eventYear = med;
+    }
+    if(!eventYear && order.year) eventYear = parseInt(order.year,10)||0;
   }catch(_){}
-  if(!byId || !byKey){
-    const indexed = catalogIndexBooksForOrder(pool);
-    byId = indexed.byId; byKey = indexed.byKey;
+
+  // 1) filtro EDITORA
+  let filtered = pool.slice();
+  if(ctxPub && ctxPub !== 'Outras'){
+    filtered = filtered.filter(b => {
+      const g = catalogBookPubGroup(b);
+      // sem editora no livro: mantém (não descarta por falta de dado)
+      if(!g) return true;
+      return g === ctxPub;
+    });
   }
+  // 2) filtro ANO do evento [Y, Y+1]
+  if(eventYear){
+    filtered = filtered.filter(b => {
+      const by = catalogBookYear(b);
+      if(!by) return true; // sem ano: fica para o match decidir
+      return by >= eventYear && by <= eventYear + 1;
+    });
+  }
+  // remove TPB/omnibus do pool (ordem = avulsas)
+  filtered = filtered.filter(b => {
+    if(typeof catalogIsTpbBook !== 'function') return true;
+    return !catalogIsTpbBook(b);
+  });
+
+  // 3) índice SÓ do subconjunto (bem menor que 6k)
+  const indexed = catalogIndexBooksForOrder(filtered);
+  const byId = indexed.byId;
+  const byKey = indexed.byKey;
+  const matchCtx = {
+    publisherGroup: ctxPub || '',
+    eventName: eventName,
+    orderMeta: Object.assign({}, order || {}, { eventYear: eventYear, year: eventYear })
+  };
+
   const out = [];
   const used = new Set();
   order.issues.forEach(iss => {
-    let book = catalogMatchIssueToBook(iss, byId, byKey);
-    // se casou com TPB e o issue parece edição avulsa (#n), tenta achar não-TPB
+    let book = catalogMatchIssueToBook(iss, byId, byKey, matchCtx);
     if(book && catalogIsTpbBook(book) && iss.number != null && String(iss.number) !== ''){
       const want = catalogIssueKeys(iss.series, iss.number);
       for(let i=0;i<want.length;i++){
         const alt = byKey[want[i]];
-        if(alt && !catalogIsTpbBook(alt)){ book = alt; break; }
+        if(alt && !catalogIsTpbBook(alt) && catalogMatchConstraintsOk(alt, iss, matchCtx)){ book = alt; break; }
       }
     }
     if(book){
@@ -5283,7 +5322,7 @@ function catalogBuildSagaList(sg, orderMode){
   try{
     state._catalogCache = state._catalogCache || {};
     state._catalogCache.sagaLists = state._catalogCache.sagaLists || {};
-    const ck = (sg && sg._sagaListCacheKey) || ('v2|' + key + '|' + (orderMode || 'AlternateNumber'));
+    const ck = (sg && sg._sagaListCacheKey) || ('v3|' + key + '|' + (orderMode || 'AlternateNumber'));
     state._catalogCache.sagaLists[ck] = result;
   }catch(_){}
   return result;
