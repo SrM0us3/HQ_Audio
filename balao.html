@@ -4696,7 +4696,11 @@ async function catalogApplySagaOrderToCatalog(order, opts){
   order.issues.forEach(iss => {
     if(!iss) return;
     // SEMPRE tenta match por series+# / id — não depende de owned
-    let book = catalogMatchIssueToBook(iss, byId, byKey);
+    const matchCtx = {
+      publisherGroup: (sg && (sg.publisherGroup || sg.publisher)) || ctxPub || '',
+      orderMeta: order
+    };
+    let book = catalogMatchIssueToBook(iss, byId, byKey, matchCtx);
     if(!book) return;
 
     const id = (typeof catalogBookOverrideId === 'function') ? catalogBookOverrideId(book) : (book.id || book.filename);
@@ -4837,14 +4841,74 @@ function catalogPreferBook(a, b){
   };
   return score(a) >= score(b) ? a : b;
 }
-function catalogMatchIssueToBook(iss, byId, byKey){
+
+/** Editora “canônica” para match (Marvel/DC/Outras). */
+function catalogBookPubGroup(b){
+  if(!b) return '';
+  const g = String(b.publisherGroup || b.publisher_group || '').trim();
+  if(g) return g;
+  const p = String(b.publisher || '').toLowerCase();
+  if(/marvel/.test(p)) return 'Marvel';
+  if(/\bdc\b|vertigo|black label|wildstorm/.test(p)) return 'DC';
+  return g || (p ? 'Outras' : '');
+}
+/** Ano numérico do livro. */
+function catalogBookYear(b){
+  if(!b) return 0;
+  let y = parseInt(b.year || b.Year || 0, 10);
+  if(y) return y;
+  const d = String(b.date || '');
+  const m = d.match(/(19|20)\d{2}/);
+  if(m) return parseInt(m[0], 10);
+  const fn = String(b.filename || '');
+  const m2 = fn.match(/\((19|20)\d{2}\)/) || fn.match(/\b(19|20)\d{2}\b/);
+  return m2 ? parseInt(m2[0].replace(/\D/g,''), 10) : 0;
+}
+/** Ano do item da ordem CBRO (issue ou evento). */
+function catalogIssueYear(iss, orderMeta){
+  if(iss){
+    let y = parseInt(iss.year || iss.Year || 0, 10);
+    if(y) return y;
+    const raw = String(iss.display || iss.raw || '');
+    const m = raw.match(/\b(19|20)\d{2}\b/);
+    if(m) return parseInt(m[0], 10);
+  }
+  if(orderMeta){
+    let y = parseInt(orderMeta.year || orderMeta.eventYear || 0, 10);
+    if(y) return y;
+  }
+  return 0;
+}
+/** true se o livro passa no filtro editora+ano do issue/saga. */
+function catalogMatchConstraintsOk(b, iss, ctx){
+  if(!b) return false;
+  ctx = ctx || {};
+  // 1) Editora: saga DC não pega Marvel
+  const wantPub = ctx.publisherGroup || '';
+  if(wantPub && wantPub !== 'Outras'){
+    const got = catalogBookPubGroup(b);
+    if(got && got !== wantPub) return false;
+  }
+  // 2) Ano: janela [ano da issue/saga, ano+1]. Sem ano no livro = não rejeita.
+  const iy = catalogIssueYear(iss, ctx.orderMeta);
+  if(iy){
+    const by = catalogBookYear(b);
+    if(by && (by < iy || by > iy + 1)) return false;
+  }
+  return true;
+}
+
+function catalogMatchIssueToBook(iss, byId, byKey, ctx){
   if(!iss) return null;
+  ctx = ctx || {};
   let found = null;
   if(iss.bookId && byId[iss.bookId]) found = byId[iss.bookId];
+  if(found && !catalogMatchConstraintsOk(found, iss, ctx)) found = null;
   if(!found && iss.matched_to){
     const m = iss.matched_to;
     if(m.bookId && byId[m.bookId]) found = byId[m.bookId];
     else if(m.id && byId[m.id]) found = byId[m.id];
+    if(found && !catalogMatchConstraintsOk(found, iss, ctx)) found = null;
   }
   const candidates = [];
   const pushKeys = (series, number) => {
@@ -4861,16 +4925,22 @@ function catalogMatchIssueToBook(iss, byId, byKey){
   }
   // 1) chaves exatas primeiro (Flashpoint|1 não deve perder para Flashpoint Reverse Flash)
   for(let i=0;i<candidates.length;i++){
-    if(byKey[candidates[i]]) found = catalogPreferBook(found, byKey[candidates[i]]);
+    const cand = byKey[candidates[i]];
+    if(!cand) continue;
+    if(typeof catalogIsTpbBook === 'function' && catalogIsTpbBook(cand)){
+      const ir = String(iss.display || iss.raw || iss.series || '').toLowerCase();
+      if(!/\btpb\b|omnibus|hardcover|trade/.test(ir)) continue;
+    }
+    if(!catalogMatchConstraintsOk(cand, iss, ctx)) continue;
+    found = catalogPreferBook(found, cand);
   }
-  // se a chave exata series|num existe, não faz fuzzy (evita minissérie roubar a principal)
+  // se a chave exata series|num existe, não faz fuzzy
   if(found){
     const want = normSeriesKey(iss.series || iss.series_name || '');
     const got = normSeriesKey(found.series || '');
-    if(want && got && want === got){
+    if(want && got && want === got && catalogMatchConstraintsOk(found, iss, ctx)){
       return found;
     }
-    // se candidate tinha chave exata na lista, preferir esse
   }
   // 2) fuzzy: número igual + série aproximada (and/&/The) — só se ainda não achou exact
   const num = catalogNormNum(iss.number != null ? iss.number : (disp.match(/#\s*(\d+)/)||[])[1]);
@@ -4882,14 +4952,15 @@ function catalogMatchIssueToBook(iss, byId, byKey){
       const bs = k.slice(0, sp);
       const bn = k.slice(sp+1);
       if(bn !== String(num)) continue;
+      const candB = byKey[k];
+      if(!catalogMatchConstraintsOk(candB, iss, ctx)) continue;
       for(let j=0;j<seriesCands.length;j++){
         if(catalogSeriesLooseEqual(seriesCands[j], bs)){
-          found = catalogPreferBook(found, byKey[k]);
+          found = catalogPreferBook(found, candB);
           break;
         }
-        // byKey guarda chave já normalizada — comparar com normSeriesKey do cand
         if(catalogSeriesLooseEqual(normSeriesKey(seriesCands[j]), bs)){
-          found = catalogPreferBook(found, byKey[k]);
+          found = catalogPreferBook(found, candB);
           break;
         }
       }
@@ -4901,6 +4972,7 @@ function catalogMatchIssueToBook(iss, byId, byKey){
       const b = byId[id];
       if(!b || catalogIsTpbBook(b)) return;
       if(catalogNormNum(b.number) !== String(num)) return;
+      if(!catalogMatchConstraintsOk(b, iss, ctx)) return;
       const ok = seriesCands.some(sc => {
         const sk = normSeriesKey(sc);
         const bk = normSeriesKey(b.series || '');
@@ -4986,6 +5058,19 @@ function catalogBuildSagaList(sg, orderMode){
   const books = (sg && sg.books) || [];
   const eventName = (sg && sg.name) || '';
   const key = normSagaName(eventName);
+  // Editora da saga: do grupo de livros ou inferida pelo nome do publisher no nav
+  let ctxPub = '';
+  try{
+    const sample = (books || []).find(b => b && (b.publisherGroup || b.publisher));
+    if(sample) ctxPub = catalogBookPubGroup(sample);
+    if(!ctxPub && order && order.publisher) ctxPub = order.publisher;
+    // heurística pelo nome do evento
+    if(!ctxPub){
+      const en = (eventName || '').toLowerCase();
+      if(/civil war|secret invasion|infinity|house of m|annihilation|dark reign|fear itself/.test(en)) ctxPub = 'Marvel';
+      if(/blackest night|brightest day|flashpoint|convergence|crisis|infinite crisis|final crisis/.test(en)) ctxPub = 'DC';
+    }
+  }catch(_){}
   // cache por saga até catalogMarkDirty
   try{
     state._catalogCache = state._catalogCache || {};
