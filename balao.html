@@ -4506,52 +4506,57 @@ function catalogSeriesTokens(s){
   if(!t) return [];
   return t.split(' ').filter(w => w.length >= 2);
 }
-/** Duas séries “parecem” a mesma? (não confunde "Flashpoint" com "Flashpoint: Reverse Flash") */
+/** Duas séries “parecem” a mesma? */
 function catalogSeriesLooseEqual(a, b){
   const ka = normSeriesKey(a);
   const kb = normSeriesKey(b);
   if(!ka || !kb) return false;
   if(ka === kb) return true;
 
+  // Eventos diferentes com palavras parecidas NÃO são a mesma série
+  // Infinite Crisis ≠ Crisis on Infinite Earths
+  // Secret Wars ≠ Secret Wars II (ano/filtro trata; aqui nomes)
+  const crisisEvents = [
+    'crisis on infinite earths',
+    'infinite crisis',
+    'final crisis',
+    'identity crisis',
+    'crisis on multiple earths'
+  ];
+  const kaC = crisisEvents.indexOf(ka);
+  const kbC = crisisEvents.indexOf(kb);
+  if(kaC >= 0 && kbC >= 0 && kaC !== kbC) return false;
+  if(kaC >= 0 && kbC < 0 && /crisis/.test(kb) && ka !== kb) return false;
+  if(kbC >= 0 && kaC < 0 && /crisis/.test(ka) && ka !== kb) return false;
+
   const ta = catalogSeriesTokens(a);
   const tb = catalogSeriesTokens(b);
   if(!ta.length || !tb.length) return false;
 
-  // Prefixo perigoso: "flashpoint" ⊂ "flashpoint reverse flash" NÃO é a mesma série
-  // Só aceita contains se a diferença for subtítulo do tipo "search" → "search for swamp thing"
-  // (mesma base, tokens extras no fim), não se a menor for só o título-pai do evento.
   const shorter = ka.length <= kb.length ? ka : kb;
   const longer = ka.length <= kb.length ? kb : ka;
-  if(longer.indexOf(shorter) === 0 || longer.indexOf(shorter) >= 0){
-    const rest = longer.replace(shorter, ' ').replace(/\s+/g, ' ').trim();
-    // se a menor tem só 1 token (ex.: "flashpoint"), NÃO expandir para minisséries "flashpoint xxx"
+  if(longer.indexOf(shorter) >= 0){
+    const rest = (' ' + longer + ' ').replace(' ' + shorter + ' ', ' ').replace(/\s+/g, ' ').trim();
     const shortTokens = shorter.split(' ').filter(Boolean);
-    if(shortTokens.length <= 1 && rest.length > 0) return false;
-    // se rest é "for swamp thing" / "aftermath …" ok; se rest começa com palavra capital típica de minissérie e a base é curta, ok se >=2 tokens base
-    if(shortTokens.length >= 2 && rest.length > 0){
-      // base multi-palavra contida: ok (search ⊂ search for swamp thing)
-      return true;
-    }
+    // 1 token: só se igual
+    if(shortTokens.length <= 1) return rest.length === 0;
+    // subtítulo extra no fim ("search" → "search for swamp thing"): menor deve ser ~prefixo frasal
     if(rest.length === 0) return true;
+    if(longer.indexOf(shorter) === 0) return true; // prefixo real
+    // tokens da menor todos na maior, MAS comprimentos próximos (evita infinite crisis ⊂ crisis on infinite earths)
+    if(shortTokens.length >= 2 && shortTokens.length >= Math.ceil(longer.split(' ').filter(Boolean).length * 0.75)){
+      return shortTokens.every(w => longer.indexOf(w) >= 0);
+    }
+    return false;
   }
 
   const [small, big] = ta.length <= tb.length ? [ta, tb] : [tb, ta];
-  if(small.length < 2){
-    // um único token: só match exato
-    return ka === kb;
-  }
+  if(small.length < 2) return ka === kb;
   const hit = small.filter(w => big.indexOf(w) >= 0).length;
-  if(hit < Math.max(2, Math.ceil(small.length * 0.8))) return false;
-  // se a maior tem MUITOS tokens a mais, exige que a menor seja prefixo de tokens
-  if(big.length >= small.length + 2){
-    // tokens iniciais iguais?
-    let pref = 0;
-    for(let i=0;i<small.length;i++){ if(big[i] === small[i]) pref++; else break; }
-    // "brightest day aftermath the search" vs "... search for swamp thing" — não é prefixo, mas hit alto
-    // permite se hit === small.length (todos os tokens da menor existem na maior)
-    return hit >= small.length;
-  }
-  return true;
+  if(hit < Math.max(2, Math.ceil(small.length * 0.85))) return false;
+  // exige proporção de tamanho: não aceitar 2 tokens batendo dentro de 4+
+  if(small.length < Math.ceil(big.length * 0.7)) return false;
+  return hit >= small.length;
 }
 /** Extra: gera chaves alternativas encurtando subtítulo após ":" ou "Aftermath" */
 function catalogIssueKeysExpanded(series, number){
@@ -4696,9 +4701,19 @@ async function catalogApplySagaOrderToCatalog(order, opts){
   order.issues.forEach(iss => {
     if(!iss) return;
     // SEMPRE tenta match por series+# / id — não depende de owned
+    // Ano do evento = moda/mediana dos anos na ordem (Crisis 1985 vs Infinite Crisis 2005)
+    let eventYear = 0;
+    try{
+      const years = (order.issues || []).map(ix => parseInt(ix.year||0,10)).filter(y => y > 1950 && y < 2100);
+      if(years.length){
+        years.sort((a,b)=>a-b);
+        eventYear = years[Math.floor(years.length/2)];
+      }
+      if(!eventYear && order.year) eventYear = parseInt(order.year,10)||0;
+    }catch(_){}
     const matchCtx = {
       publisherGroup: (sg && (sg.publisherGroup || sg.publisher)) || ctxPub || '',
-      orderMeta: order
+      orderMeta: Object.assign({}, order || {}, { eventYear: eventYear, year: eventYear || (order && order.year) })
     };
     let book = catalogMatchIssueToBook(iss, byId, byKey, matchCtx);
     if(!book) return;
@@ -4889,11 +4904,13 @@ function catalogMatchConstraintsOk(b, iss, ctx){
     const got = catalogBookPubGroup(b);
     if(got && got !== wantPub) return false;
   }
-  // 2) Ano: janela [ano da issue/saga, ano+1]. Sem ano no livro = não rejeita.
-  const iy = catalogIssueYear(iss, ctx.orderMeta);
+  // 2) Ano: issue year ou ano do evento; janela [Y, Y+1]. Sem ano no livro = não rejeita.
+  let iy = catalogIssueYear(iss, ctx.orderMeta);
+  if(!iy && ctx.orderMeta) iy = parseInt(ctx.orderMeta.eventYear || ctx.orderMeta.year || 0, 10) || 0;
   if(iy){
     const by = catalogBookYear(b);
-    if(by && (by < iy || by > iy + 1)) return false;
+    // Crisis 1985 não aceita 2005
+    if(by && (by < iy - 0 || by > iy + 1)) return false;
   }
   return true;
 }
