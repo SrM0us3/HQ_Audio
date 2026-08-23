@@ -4701,19 +4701,22 @@ async function catalogApplySagaOrderToCatalog(order, opts){
   order.issues.forEach(iss => {
     if(!iss) return;
     // SEMPRE tenta match por series+# / id — não depende de owned
-    // Ano do evento = moda/mediana dos anos na ordem (Crisis 1985 vs Infinite Crisis 2005)
-    let eventYear = 0;
+    let eventYear = catalogKnownEventYear(eventName);
     try{
       const years = (order.issues || []).map(ix => parseInt(ix.year||0,10)).filter(y => y > 1950 && y < 2100);
       if(years.length){
         years.sort((a,b)=>a-b);
-        eventYear = years[Math.floor(years.length/2)];
+        const med = years[Math.floor(years.length/2)];
+        // se a mediana diverge muito do ano conhecido, prefere o conhecido
+        if(!eventYear) eventYear = med;
+        else if(Math.abs(med - eventYear) <= 2) eventYear = med;
       }
       if(!eventYear && order.year) eventYear = parseInt(order.year,10)||0;
     }catch(_){}
     const matchCtx = {
       publisherGroup: (sg && (sg.publisherGroup || sg.publisher)) || ctxPub || '',
-      orderMeta: Object.assign({}, order || {}, { eventYear: eventYear, year: eventYear || (order && order.year) })
+      orderMeta: Object.assign({}, order || {}, { eventYear: eventYear, year: eventYear || (order && order.year) }),
+      eventName: eventName
     };
     let book = catalogMatchIssueToBook(iss, byId, byKey, matchCtx);
     if(!book) return;
@@ -4857,6 +4860,42 @@ function catalogPreferBook(a, b){
   return score(a) >= score(b) ? a : b;
 }
 
+/** Ano “oficial” de eventos conhecidos (quando a ordem CBRO não traz year). */
+function catalogKnownEventYear(name){
+  const k = normSagaName(name || '');
+  const map = {
+    'crisis on infinite earths': 1985,
+    'infinite crisis': 2005,
+    'final crisis': 2008,
+    'identity crisis': 2004,
+    'flashpoint': 2011,
+    'convergence': 2015,
+    'blackest night': 2009,
+    'brightest day': 2010,
+    'civil war': 2006,
+    'civil war ii': 2016,
+    'secret invasion': 2008,
+    'secret wars': 1984,
+    'secret wars 2015': 2015,
+    'house of m': 2005,
+    'fear itself': 2011,
+    'dark nights metal': 2017,
+    'dark nights death metal': 2020,
+    'infinity': 2013,
+    'infinity gauntlet': 1991,
+    'annihilation': 2006
+  };
+  if(map[k]) return map[k];
+  // fallback parcial
+  if(/crisis on infinite earths/.test(k)) return 1985;
+  if(/^infinite crisis$/.test(k)) return 2005;
+  if(/final crisis/.test(k)) return 2008;
+  if(/blackest night/.test(k)) return 2009;
+  if(/brightest day/.test(k)) return 2010;
+  if(/flashpoint/.test(k)) return 2011;
+  if(/convergence/.test(k)) return 2015;
+  return 0;
+}
 /** Editora “canônica” para match (Marvel/DC/Outras). */
 function catalogBookPubGroup(b){
   if(!b) return '';
@@ -4904,13 +4943,13 @@ function catalogMatchConstraintsOk(b, iss, ctx){
     const got = catalogBookPubGroup(b);
     if(got && got !== wantPub) return false;
   }
-  // 2) Ano: issue year ou ano do evento; janela [Y, Y+1]. Sem ano no livro = não rejeita.
+  // 2) Ano: prioriza ano da issue; senão ano do evento (mapa conhecido).
   let iy = catalogIssueYear(iss, ctx.orderMeta);
   if(!iy && ctx.orderMeta) iy = parseInt(ctx.orderMeta.eventYear || ctx.orderMeta.year || 0, 10) || 0;
+  if(!iy && ctx.eventName) iy = catalogKnownEventYear(ctx.eventName);
   if(iy){
     const by = catalogBookYear(b);
-    // Crisis 1985 não aceita 2005
-    if(by && (by < iy - 0 || by > iy + 1)) return false;
+    if(by && (by < iy || by > iy + 1)) return false;
   }
   return true;
 }
@@ -4959,9 +4998,27 @@ function catalogMatchIssueToBook(iss, byId, byKey, ctx){
       return found;
     }
   }
-  // 2) fuzzy: número igual + série aproximada (and/&/The) — só se ainda não achou exact
+  // 2) fuzzy — desligado para eventos cujo nome é “fechado” (Crisis on Infinite Earths etc.)
   const num = catalogNormNum(iss.number != null ? iss.number : (disp.match(/#\s*(\d+)/)||[])[1]);
   const seriesCands = [iss.series, iss.series_name, disp.split('#')[0]].filter(Boolean);
+  const closedEvent = seriesCands.some(sc => {
+    const k = normSeriesKey(sc||'');
+    return !!catalogKnownEventYear(k) || /^(crisis|infinite crisis|final crisis|identity crisis|flashpoint|blackest night|brightest day|civil war|secret invasion|convergence)\b/.test(k);
+  });
+  // se o item da ordem é da série principal do evento, NÃO usar fuzzy (só chave exata)
+  if(closedEvent && found){
+    // found pode ser de outra série via chave errada — revalida
+    if(!catalogMatchConstraintsOk(found, iss, ctx)) found = null;
+    else {
+      const want = normSeriesKey(iss.series || '');
+      const got = normSeriesKey(found.series || '');
+      if(want && got && want !== got && !got.startsWith(want) && !want.startsWith(got)) found = null;
+    }
+  }
+  if(closedEvent && !found){
+    // só tenta chave exata já feita; não fuzzy
+    return found;
+  }
   if(num && seriesCands.length){
     for(const k in byKey){
       if(!k || k.indexOf('|') < 0 || k.indexOf('file:') === 0) continue;
@@ -5088,14 +5145,16 @@ function catalogBuildSagaList(sg, orderMode){
       if(/blackest night|brightest day|flashpoint|convergence|crisis|infinite crisis|final crisis/.test(en)) ctxPub = 'DC';
     }
   }catch(_){}
-  // cache por saga até catalogMarkDirty
+  // cache por saga (versão 2 = invalida cache antigo com match errado)
   try{
     state._catalogCache = state._catalogCache || {};
     state._catalogCache.sagaLists = state._catalogCache.sagaLists || {};
-    const ck = key + '|' + (orderMode || 'AlternateNumber');
+    const ck = 'v2|' + key + '|' + (orderMode || 'AlternateNumber');
     if(!state._catalogCache.dirty && state._catalogCache.sagaLists[ck]){
       return state._catalogCache.sagaLists[ck];
     }
+    // expõe ck para gravar no return
+    sg._sagaListCacheKey = ck;
   }catch(_){}
 
   const order = (typeof catalogGetSagaOrder === 'function')
@@ -5224,7 +5283,7 @@ function catalogBuildSagaList(sg, orderMode){
   try{
     state._catalogCache = state._catalogCache || {};
     state._catalogCache.sagaLists = state._catalogCache.sagaLists || {};
-    const ck = key + '|' + (orderMode || 'AlternateNumber');
+    const ck = (sg && sg._sagaListCacheKey) || ('v2|' + key + '|' + (orderMode || 'AlternateNumber'));
     state._catalogCache.sagaLists[ck] = result;
   }catch(_){}
   return result;
