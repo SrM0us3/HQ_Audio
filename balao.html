@@ -610,7 +610,7 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
       <button class="iconbtn" id="btnDetect" title="Detectar balões automaticamente" style="display:none">🪄</button>
       <button class="iconbtn" id="btnWalk" title="Ajustar tamanhos em sequência" style="display:none">🧭</button>
       <button class="iconbtn" id="btnMark" title="Marcar balões">✎</button>
-      <button class="iconbtn" id="btnReadZoom" title="Ampliar balão ao ler">🔍</button>
+      <button class="iconbtn" id="btnReadZoom" title="Zoom só no balão (página permanece fixa)">🔍</button>
       <button class="iconbtn" id="btnAudio" title="Áudio ao navegar balões">🔊</button>
       <button class="iconbtn" id="btnPlay" title="Reproduzir tudo com áudio">▶</button>
       <button class="iconbtn" id="btnList" title="Balões">☰</button>
@@ -1885,16 +1885,20 @@ function renderPage(opts){
   closeSheet();
 }
 
-/** Destaca + zoom (e opcionalmente fala) um balão — imagem já deve estar pronta */
+/** Destaca + (opcional) zoom só no balão — página permanece fixa (sem zoom na página inteira) */
 function applyBalloonFocus(b, opts){
   opts = opts || {};
   if(!b) return;
+  // Página sempre enquadrada inteira no modo leitura
+  if(state.viewTransform && state.viewTransform.scale > 1.02){
+    resetZoom();
+  }
   highlightBalloon(b);
+  // 🔍 ligado: card ampliado só do balão; desligado: só destaque na página fixa
   if(state.readZoomOn){
     showBalloonCard(b);
   } else {
     hideBalloonCard();
-    zoomToBalloon(b, { reserveBottom: window.innerWidth < 700 ? 0.15 : 0.08 });
   }
   if(opts.speak && state.audioOn){
     const txt = String(b.text || '').trim();
@@ -2001,7 +2005,8 @@ function highlightBalloon(b){
 
 /* ==================== CARD AMPLIADO (zoom ao ler) ==================== */
 function showBalloonCard(b){
-  if(!state.readZoomOn || !state.comic) return;
+  // Zoom só no recorte do balão (página fica fixa). Exige 🔍 ligado.
+  if(!state.readZoomOn || !state.comic || !b) return;
   const img = $('#pageImg');
   const stage = $('#stage').getBoundingClientRect();
   const rect = img.getBoundingClientRect();
@@ -2253,7 +2258,7 @@ $('#btnReadZoom').addEventListener('click', async ()=>{
   state.readZoomOn = !state.readZoomOn;
   $('#btnReadZoom').classList.toggle('on', state.readZoomOn);
   if(state.comic) await storeSet('readzoom:'+state.comic.id, state.readZoomOn);
-  toast(state.readZoomOn ? 'Zoom ao ler: ligado' : 'Zoom ao ler: desligado', 1800);
+  toast(state.readZoomOn ? 'Zoom no balão: ligado (página fixa)' : 'Zoom no balão: desligado', 2200);
   if(!state.readZoomOn) hideBalloonCard();
 });
 $('#btnMark').addEventListener('click', ()=>{
@@ -3041,9 +3046,15 @@ function onBalloonTap(b){
     pauseAndEditWhileReading(b);
     return;
   }
+  // Página fixa; zoom só no card do balão se 🔍 ligado
+  if(state.viewTransform && state.viewTransform.scale > 1.02){
+    const keepId = b.id;
+    resetZoom();
+    state.activeBalloon = keepId;
+  }
   highlightBalloon(b);
   if(state.readZoomOn) showBalloonCard(b);
-  // Áudio só se o interruptor estiver ligado (Play automático ignora isso e sempre fala)
+  else hideBalloonCard();
   if(state.audioOn){
     speak(b.text || '(sem texto — use OCR ou digite manualmente)');
   }
@@ -4264,12 +4275,18 @@ function playNext(i){
   highlightBalloon(b);
   // Zoom no balão ativo (PC e celular) quando a opção 🔍 estiver ligada.
   // Sem zoom: no celular aproxima a página; no PC mantém visão geral.
-  // Guided view no Play: sempre enquadra o balão (PC e celular)
+  // Play: página fixa; 🔍 = card do balão (sem zoom na página inteira)
+  if(state.viewTransform && state.viewTransform.scale > 1.02){
+    // mantém página legível; highlightBalloon já redesenha
+    const keepId = b.id;
+    resetZoom();
+    state.activeBalloon = keepId;
+    drawBalloons();
+  }
   if(state.readZoomOn){
     showBalloonCard(b);
   } else {
     hideBalloonCard();
-    zoomToBalloon(b, { reserveBottom: window.innerWidth < 700 ? 0.15 : 0.08 });
   }
   const txt = String(b.text || '').trim();
   if(!txt && !state._emptyTextWarned){
