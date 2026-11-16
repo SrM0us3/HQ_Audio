@@ -532,11 +532,21 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
     font-size:11px;font-weight:500;padding:6px 12px;opacity:.85;border-radius:8px;
   }
   .row.editor-extra #btnDelBalloon:active{opacity:1;background:rgba(160,60,60,.15);}
+  .edit-balloon-preview{
+    width:100%;max-height:120px;margin-bottom:8px;border-radius:10px;overflow:hidden;
+    border:2px solid var(--gold);background:#111;
+    display:flex;align-items:center;justify-content:center;
+  }
+  .edit-balloon-preview img{
+    max-width:100%;max-height:120px;width:auto;height:auto;object-fit:contain;display:block;
+  }
   @media (max-width:700px){
-    #sheet.editing-balloon{max-height:42%;}
+    #sheet.editing-balloon{max-height:48%;}
+    .edit-balloon-preview{max-height:88px;margin-bottom:6px;}
+    .edit-balloon-preview img{max-height:88px;}
     .row.editor-nav button{padding:7px 2px;font-size:11px;min-height:40px;}
     .row.editor-nav button.nav-edge{flex-basis:36px;font-size:16px;}
-    textarea.edit-text{min-height:52px;font-size:16px;padding:8px;}
+    textarea.edit-text{min-height:48px;font-size:16px;padding:8px;}
   }
 
   select, input[type=range]{width:100%;}
@@ -2049,32 +2059,40 @@ function zoomToBalloon(b, opts){
   if(!dispW || !dispH || stage.height < 40) return;
   const px=(b.x+b.w/2)*dispW, py=(b.y+b.h/2)*dispH;
   const bw = Math.max(8, b.w*dispW), bh = Math.max(8, b.h*dispH);
-  // faixa visível (reserva topo/base para barras)
-  const topPad = opts.reserveTop != null ? opts.reserveTop : 0.02;
-  const reserve = Math.min(0.7, Math.max(0, opts.reserveBottom || 0));
-  const visibleTop = stage.height * topPad;
-  const visibleBottom = stage.height * (1 - reserve);
-  const visibleH = Math.max(60, visibleBottom - visibleTop);
-  const visibleMid = visibleTop + visibleH * 0.45; // um pouco acima do centro da faixa
-  const margin = opts.margin != null ? opts.margin : 0.85;
-  // escala moderada — evita empurrar o balão para fora da tela
+  // Faixa em pixels dentro do stage (preferencial) ou por fração
+  let visibleTop, visibleBottom;
+  if(opts.bandTop != null && opts.bandBottom != null){
+    visibleTop = Math.max(0, opts.bandTop);
+    visibleBottom = Math.min(stage.height, opts.bandBottom);
+  } else {
+    const topPad = opts.reserveTop != null ? opts.reserveTop : 0.02;
+    const reserve = Math.min(0.7, Math.max(0, opts.reserveBottom || 0));
+    visibleTop = stage.height * topPad;
+    visibleBottom = stage.height * (1 - reserve);
+  }
+  const visibleH = Math.max(50, visibleBottom - visibleTop);
+  if(visibleH < 50) return; // quase nada visível — não zooma
+  const visibleMid = visibleTop + visibleH * 0.5;
+  const margin = opts.margin != null ? opts.margin : 0.8;
   let scale = Math.min(
     (stage.width * margin) / bw,
     (visibleH * margin) / bh
   );
-  scale = Math.min(3.0, Math.max(1.15, scale));
+  // no teclado a faixa é baixa: escala menor
+  const maxScale = visibleH < stage.height * 0.4 ? 2.2 : 3.0;
+  scale = Math.min(maxScale, Math.max(1.1, scale));
   let tx = stage.width/2 - px*scale;
   let ty = visibleMid - py*scale;
-  // Garante que o centro do balão fique DENTRO da faixa visível
+  // prende o centro do balão na faixa
   let cy = py*scale + ty;
-  const minY = visibleTop + Math.min(bh*scale*0.35, visibleH*0.2);
-  const maxY = visibleBottom - Math.min(bh*scale*0.35, visibleH*0.2);
+  const pad = Math.min(bh*scale*0.25, visibleH*0.15);
+  const minY = visibleTop + pad;
+  const maxY = visibleBottom - pad;
   if(cy < minY) ty += (minY - cy);
   if(cy > maxY) ty -= (cy - maxY);
-  // horizontal: evita sumir nas laterais
   let cx = px*scale + tx;
-  const minX = bw*scale*0.3;
-  const maxX = stage.width - bw*scale*0.3;
+  const minX = Math.min(bw*scale*0.25, stage.width*0.1);
+  const maxX = stage.width - minX;
   if(cx < minX) tx += (minX - cx);
   if(cx > maxX) tx -= (cx - maxX);
   state.viewTransform = {scale,tx,ty};
@@ -3404,29 +3422,39 @@ async function deleteBalloon(b){
 function rezoomEditingBalloon(){
   const b = state.editingBalloon || state.pausedBalloon;
   if(!b || !state.comic) return;
-  const stage = $('#stage');
-  if(!stage) return;
-  const stageRect = stage.getBoundingClientRect();
+  const stageEl = $('#stage');
+  if(!stageEl) return;
+  // evita o navegador rolar a página ao focar o input
+  try{ window.scrollTo(0,0); document.documentElement.scrollTop=0; document.body.scrollTop=0; }catch(_){}
+
+  const stageRect = stageEl.getBoundingClientRect();
+  const vv = window.visualViewport;
+  // interseção stage × visualViewport (o que realmente aparece com teclado)
+  const viewTop = vv ? vv.offsetTop : 0;
+  const viewBottom = vv ? (vv.offsetTop + vv.height) : window.innerHeight;
+  let bandTop = Math.max(0, viewTop - stageRect.top);
+  let bandBottom = Math.min(stageRect.height, viewBottom - stageRect.top);
+
+  // sheet / lite bar cobrem a parte de baixo do stage
   const sheet = $('#sheet');
-  const sheetOpen = sheet && sheet.classList.contains('open');
-  let overlap = 0;
-  if(sheetOpen){
+  if(sheet && sheet.classList.contains('open')){
     const sr = sheet.getBoundingClientRect();
-    overlap = Math.max(0, stageRect.bottom - sr.top);
+    bandBottom = Math.min(bandBottom, sr.top - stageRect.top);
   }
   const bar = $('#liteEditBar');
-  if(bar && bar.style.display !== 'none'){
+  if(bar && bar.style.display !== 'none' && bar.offsetParent !== null){
     const br = bar.getBoundingClientRect();
-    overlap = Math.max(overlap, stageRect.bottom - br.top);
+    bandBottom = Math.min(bandBottom, br.top - stageRect.top);
   }
-  const vv = window.visualViewport;
-  if(vv){
-    const visibleBottom = vv.height + vv.offsetTop;
-    // quanto do stage ficou abaixo da área visível (teclado)
-    overlap = Math.max(overlap, stageRect.bottom - visibleBottom);
+  // margem interna
+  bandTop += 6;
+  bandBottom -= 6;
+  if(bandBottom - bandTop < 70){
+    // faixa minúscula com teclado: não força zoom extremo na página —
+    // o preview na sheet já mostra o balão
+    return;
   }
-  const reserve = Math.min(0.62, Math.max(0.22, (overlap + 12) / Math.max(1, stageRect.height)));
-  zoomToBalloon(b, { reserveBottom: reserve, margin: 0.82, reserveTop: 0.03 });
+  zoomToBalloon(b, { bandTop: bandTop, bandBottom: bandBottom, margin: 0.78 });
 }
 
 function openBalloonEditor(b, isNew){
@@ -3436,7 +3464,9 @@ function openBalloonEditor(b, isNew){
   $('#sheetTitle').textContent = `Balão ${b.order} de ${marks.length}`;
   const body = $('#sheetBody');
   if(!body) return;
+  const previewUrl = (typeof cropBalloonToDataUrl === 'function') ? cropBalloonToDataUrl(b) : '';
   body.innerHTML = `
+    <div id="editBalloonPreview" class="edit-balloon-preview">${previewUrl ? '<img alt="balão" src="'+previewUrl+'">' : ''}</div>
     <textarea class="edit-text" id="editText" placeholder="Texto do balão..." rows="3">${b.text||''}</textarea>
     <div class="row editor-nav">
       <button type="button" class="nav-edge" id="btnPrevB" title="Anterior" ${idx<=0?'disabled':''}>‹</button>
@@ -3453,12 +3483,20 @@ function openBalloonEditor(b, isNew){
   `;
   const sheet = $('#sheet');
   sheet.classList.add('open', 'editing-balloon');
-  // zoom após layout da sheet
+  // zoom após layout; reforça depois (teclado/animação)
   requestAnimationFrame(()=> rezoomEditingBalloon());
+  setTimeout(()=> rezoomEditingBalloon(), 280);
   const et = $('#editText');
   if(et){
-    et.addEventListener('focus', ()=> setTimeout(rezoomEditingBalloon, 120));
-    et.addEventListener('blur', ()=> setTimeout(rezoomEditingBalloon, 120));
+    const onFocus = ()=>{
+      try{ window.scrollTo(0,0); }catch(_){}
+      // teclado demora a subir no iOS/Android
+      setTimeout(rezoomEditingBalloon, 100);
+      setTimeout(rezoomEditingBalloon, 350);
+      setTimeout(rezoomEditingBalloon, 600);
+    };
+    et.addEventListener('focus', onFocus);
+    et.addEventListener('blur', ()=> setTimeout(rezoomEditingBalloon, 200));
   }
   $('#btnOcr').onclick = async ()=>{
     $('#btnOcr').textContent='Transcrevendo…';
