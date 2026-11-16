@@ -3251,7 +3251,7 @@ function startAdjustBalloon(b){
 }
 const _btnList = $('#btnList'); if(_btnList) _btnList.addEventListener('click', ()=>openSheetList());
 const _btnCloseSheet = $('#btnCloseSheet'); if(_btnCloseSheet) _btnCloseSheet.addEventListener('click', closeSheet);
-function closeSheet(){ const sh = $('#sheet'); if(sh){ sh.classList.remove('open','settings-open','editing-balloon'); sh.style.display=''; sh.style.transform=''; } state.editingBalloon = null; } }
+function closeSheet(){ const sh = $('#sheet'); if(sh){ sh.classList.remove('open','settings-open','editing-balloon'); sh.style.display=''; sh.style.transform=''; } state.editingBalloon = null; }
 function openSheetList(){
   const _st = $('#sheetTitle'); if(_st) _st.textContent='Balões desta página';
   const body = $('#sheetBody'); if(!body) return; body.innerHTML='';
