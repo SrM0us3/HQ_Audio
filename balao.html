@@ -510,6 +510,30 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
   .row button.ocr{background:var(--gold);border-color:var(--gold);color:#2b2205;}
   .row button:disabled{opacity:.5;pointer-events:none;}
   .empty-hint{color:var(--text-dim);font-size:13px;text-align:center;padding:20px 6px;}
+  /* Editor de balão: uma linha de ações + excluir discreto */
+  .row.editor-nav{gap:6px;margin-top:8px;align-items:center;}
+  .row.editor-nav button{
+    flex:1 1 0;min-width:0;padding:8px 4px;font-size:12px;white-space:nowrap;
+  }
+  .row.editor-nav button.nav-edge{
+    flex:0 0 40px;padding:8px 0;font-size:18px;font-weight:700;
+  }
+  .row.editor-extra{
+    margin-top:6px;gap:8px;align-items:center;justify-content:space-between;
+  }
+  .row.editor-extra button{flex:0 1 auto;padding:7px 10px;font-size:12px;}
+  .row.editor-extra #btnDelBalloon{
+    margin-left:auto;flex:0 0 auto;
+    background:transparent;border:1px solid transparent;color:#a66;
+    font-size:11px;font-weight:500;padding:6px 8px;opacity:.75;
+  }
+  .row.editor-extra #btnDelBalloon:active{opacity:1;border-color:#a66;background:rgba(160,60,60,.12);}
+  @media (max-width:700px){
+    #sheet.editing-balloon{max-height:42%;}
+    .row.editor-nav button{padding:7px 2px;font-size:11px;min-height:40px;}
+    .row.editor-nav button.nav-edge{flex-basis:36px;font-size:16px;}
+    textarea.edit-text{min-height:52px;font-size:16px;padding:8px;}
+  }
 
   select, input[type=range]{width:100%;}
   .settings-row{margin-bottom:16px;}
@@ -2201,20 +2225,17 @@ function pauseAndEditWhileReading(b){
     document.body.classList.add('mobile-editing');
   } else {
     document.body.classList.remove('mobile-editing');
-  document.body.classList.remove('keyboard-open');
-  if(isMobileEditLayout()){
-    // volta visão geral da página ao sair da edição
-    try{
-      const keep = state.activeBalloon;
-      resetZoom();
-      if(keep){ state.activeBalloon = keep; drawBalloons(); }
-    }catch(_){}
-  }
   }
   positionLiteEditBar();
+  const ta = $('#liteEditText');
+  if(ta && !ta._rezoomBound){
+    ta._rezoomBound = true;
+    ta.addEventListener('focus', ()=> setTimeout(()=> rezoomEditingBalloon(), 150));
+  }
   setTimeout(()=> {
     positionLiteEditBar();
-    try{ $('#liteEditText').focus({ preventScroll:true }); }catch(e){ try{ $('#liteEditText').focus(); }catch(_){} }
+    rezoomEditingBalloon();
+    try{ ta && ta.focus({ preventScroll:true }); }catch(e){ try{ ta && ta.focus(); }catch(_){} }
   }, 180);
 }
 
@@ -2223,7 +2244,15 @@ async function closeLiteEdit(resume, opts){
   const bar = $('#liteEditBar');
   if(bar) bar.style.display = 'none';
   document.body.classList.remove('mobile-editing');
+  document.body.classList.remove('keyboard-open');
   if(bar){ bar.style.bottom = ''; bar.style.maxHeight = ''; }
+  if(isMobileEditLayout()){
+    try{
+      const keep = state.activeBalloon;
+      resetZoom();
+      if(keep){ state.activeBalloon = keep; drawBalloons(); }
+    }catch(_){}
+  }
   if(!state.paused) return;
   const b = state.pausedBalloon;
   state.paused = false;
@@ -2272,10 +2301,19 @@ if(editScrim){
   editScrim.addEventListener('click', ()=> closeLiteEdit(true));
 }
 if(window.visualViewport){
-  window.visualViewport.addEventListener('resize', positionLiteEditBar);
-  window.visualViewport.addEventListener('scroll', positionLiteEditBar);
+  window.visualViewport.addEventListener('resize', ()=>{
+    positionLiteEditBar();
+    if(state.editingBalloon || state.pausedBalloon) rezoomEditingBalloon();
+  });
+  window.visualViewport.addEventListener('scroll', ()=>{
+    positionLiteEditBar();
+    if(state.editingBalloon || state.pausedBalloon) rezoomEditingBalloon();
+  });
 }
-window.addEventListener('resize', positionLiteEditBar);
+window.addEventListener('resize', ()=>{
+  positionLiteEditBar();
+  if(state.editingBalloon || state.pausedBalloon) rezoomEditingBalloon();
+});
 
 
 function clearHighlight(){
@@ -3213,7 +3251,7 @@ function startAdjustBalloon(b){
 }
 const _btnList = $('#btnList'); if(_btnList) _btnList.addEventListener('click', ()=>openSheetList());
 const _btnCloseSheet = $('#btnCloseSheet'); if(_btnCloseSheet) _btnCloseSheet.addEventListener('click', closeSheet);
-function closeSheet(){ const sh = $('#sheet'); if(sh){ sh.classList.remove('open','settings-open'); sh.style.display=''; sh.style.transform=''; } }
+function closeSheet(){ const sh = $('#sheet'); if(sh){ sh.classList.remove('open','settings-open','editing-balloon'); sh.style.display=''; sh.style.transform=''; } state.editingBalloon = null; } }
 function openSheetList(){
   const _st = $('#sheetTitle'); if(_st) _st.textContent='Balões desta página';
   const body = $('#sheetBody'); if(!body) return; body.innerHTML='';
@@ -3340,32 +3378,51 @@ async function deleteBalloon(b){
 }
 
 /* ==================== BALLOON EDITOR ==================== */
+function rezoomEditingBalloon(){
+  const b = state.editingBalloon || state.pausedBalloon;
+  if(!b || !state.comic) return;
+  const sheet = $('#sheet');
+  const sheetOpen = sheet && sheet.classList.contains('open');
+  const sheetH = sheetOpen ? sheet.getBoundingClientRect().height : 0;
+  const vv = window.visualViewport;
+  const fromBottom = vv ? Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)) : 0;
+  const bar = $('#liteEditBar');
+  const liteH = (bar && bar.style.display !== 'none') ? bar.getBoundingClientRect().height : 0;
+  const bottomUI = Math.max(sheetH, liteH) + fromBottom;
+  const reserve = Math.min(0.72, Math.max(0.28, bottomUI / Math.max(1, window.innerHeight) + 0.04));
+  zoomToBalloon(b, { reserveBottom: reserve, margin: 0.9 });
+}
+
 function openBalloonEditor(b, isNew){
   const marks = currentMarks();
   const idx = marks.findIndex(x=>x.id===b.id);
+  state.editingBalloon = b;
   $('#sheetTitle').textContent = `Balão ${b.order} de ${marks.length}`;
   const body = $('#sheetBody');
   if(!body) return;
   body.innerHTML = `
-    <textarea class="edit-text" id="editText" placeholder="Texto do balão...">${b.text||''}</textarea>
-    <div class="row">
-      <button class="ocr" id="btnOcr">🔎 OCR (PP-OCR)</button>
-      <button id="btnAdjust">⤢ Ajustar posição</button>
+    <textarea class="edit-text" id="editText" placeholder="Texto do balão..." rows="3">${b.text||''}</textarea>
+    <div class="row editor-nav">
+      <button type="button" class="nav-edge" id="btnPrevB" title="Anterior" ${idx<=0?'disabled':''}>‹</button>
+      <button type="button" class="ocr" id="btnOcr" title="OCR">🔎</button>
+      <button type="button" id="btnSpeak" title="Ouvir">🔊</button>
+      <button type="button" class="primary" id="btnSaveText" title="Salvar">Salvar</button>
+      <button type="button" class="nav-edge" id="btnNextB" title="Próximo" ${idx<0||idx>=marks.length-1?'disabled':''}>›</button>
     </div>
-    <div class="row">
-      <button class="primary" id="btnSpeak">🔊 Ouvir</button>
-      <button id="btnSaveText">Salvar texto</button>
-    </div>
-    <div class="row">
-      <button id="btnPrevB" ${idx<=0?'disabled':''}>‹ Anterior</button>
-      <button id="btnNextB" ${idx<0||idx>=marks.length-1?'disabled':''}>Próximo ›</button>
-    </div>
-    <div class="row">
-      <button id="btnDelBalloon">Excluir balão</button>
+    <div class="row editor-extra">
+      <button type="button" id="btnAdjust">⤢ Ajustar</button>
+      <button type="button" id="btnDelBalloon" title="Apagar este balão">Excluir</button>
     </div>
   `;
-  $('#sheet').classList.add('open');
-  zoomToBalloon(b, {reserveBottom:0.55});
+  const sheet = $('#sheet');
+  sheet.classList.add('open', 'editing-balloon');
+  // zoom após layout da sheet
+  requestAnimationFrame(()=> rezoomEditingBalloon());
+  const et = $('#editText');
+  if(et){
+    et.addEventListener('focus', ()=> setTimeout(rezoomEditingBalloon, 120));
+    et.addEventListener('blur', ()=> setTimeout(rezoomEditingBalloon, 120));
+  }
   $('#btnOcr').onclick = async ()=>{
     $('#btnOcr').textContent='Transcrevendo…';
     $('#btnOcr').disabled = true;
@@ -3391,7 +3448,7 @@ function openBalloonEditor(b, isNew){
   $('#btnSaveText').onclick = async ()=>{ b.text=$('#editText').value; await saveMarks(); drawBalloons(); toast('Texto salvo ✓', 1500); };
   $('#btnPrevB').onclick = async ()=>{ b.text=$('#editText').value; await saveMarks(); if(marks[idx-1]) openBalloonEditor(marks[idx-1], false); };
   $('#btnNextB').onclick = async ()=>{ b.text=$('#editText').value; await saveMarks(); if(marks[idx+1]) openBalloonEditor(marks[idx+1], false); };
-  $('#btnDelBalloon').onclick = ()=> deleteBalloon(b);
+  $('#btnDelBalloon').onclick = ()=>{ if(confirm('Excluir este balão?')) deleteBalloon(b); };
 }
 
 /* ==================== OCR LOCAL (PP-OCRv5 Latin via ONNX) ==================== */
