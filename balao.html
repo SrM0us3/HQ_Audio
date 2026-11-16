@@ -783,6 +783,9 @@ const state = {
   paused:false,
   pausedBalloon:null,
   lastDetectDiag:null,
+  /** Após trocar de página: focar este balão quando a imagem carregar */
+  pendingFocusBalloon:null,
+  _pageLoadGen:0,
 };
 
 const $ = s => document.querySelector(s);
@@ -1810,20 +1813,65 @@ function fitImageToStage(){
   img.style.width = Math.round(img.naturalWidth*scale)+'px';
   img.style.height = Math.round(img.naturalHeight*scale)+'px';
 }
-function renderPage(){
+function renderPage(opts){
+  opts = opts || {};
   clearDraft();
   hideBalloonCard();
   closeLiteEdit(false);
   const p = state.comic.pages[state.pageIndex];
   const img = $('#pageImg');
-  img.onload = ()=>{ fitImageToStage(); resetZoom(); drawBalloons(); };
+  const focusB = opts.focusBalloon || state.pendingFocusBalloon || null;
+  const focusSpeak = !!opts.speak;
+  state.pendingFocusBalloon = null;
+  const gen = ++state._pageLoadGen;
+
+  const onReady = ()=>{
+    if(gen !== state._pageLoadGen) return; // página já mudou de novo
+    fitImageToStage();
+    if(focusB){
+      state.activeBalloon = focusB.id;
+      drawBalloons();
+      // espera um frame para offsetWidth/height da imagem estabilizarem
+      requestAnimationFrame(()=>{
+        if(gen !== state._pageLoadGen) return;
+        applyBalloonFocus(focusB, { speak: focusSpeak });
+      });
+    } else {
+      resetZoom();
+      drawBalloons();
+    }
+  };
+
+  img.onload = onReady;
   img.src = p.url;
+  // cache do browser: onload pode não disparar de novo
+  if(img.complete && img.naturalWidth){
+    onReady();
+  }
+
   $('#pagePos').textContent = `${state.pageIndex+1}/${state.comic.pages.length}`;
   updateReadProgress();
   if(state.comic) storeSet('page:'+state.comic.id, state.pageIndex);
   setMode(state.mode==='play' ? state.mode : 'read');
   $('#btnReadZoom').classList.toggle('on', state.readZoomOn);
   closeSheet();
+}
+
+/** Destaca + zoom (e opcionalmente fala) um balão — imagem já deve estar pronta */
+function applyBalloonFocus(b, opts){
+  opts = opts || {};
+  if(!b) return;
+  highlightBalloon(b);
+  if(state.readZoomOn){
+    showBalloonCard(b);
+  } else {
+    hideBalloonCard();
+    zoomToBalloon(b, { reserveBottom: window.innerWidth < 700 ? 0.15 : 0.08 });
+  }
+  if(opts.speak && state.audioOn){
+    const txt = String(b.text || '').trim();
+    if(txt) speak(txt);
+  }
 }
 function drawBalloons(){
   const overlay = $('#overlay');
@@ -3014,21 +3062,13 @@ function goBalloonDelta(delta){
   if(!b) return;
 
   if(page !== state.pageIndex){
+    // Espera a imagem da nova página carregar; senão o zoom sai em branco
     state.pageIndex = page;
-    renderPage();
+    state.pendingFocusBalloon = b;
+    renderPage({ focusBalloon: b, speak: !!state.audioOn });
+    return;
   }
-  highlightBalloon(b);
-  // Guided view: sempre enquadra o balão (PC e celular). 🔍 = card ampliado extra.
-  if(state.readZoomOn){
-    showBalloonCard(b);
-  } else {
-    hideBalloonCard();
-    zoomToBalloon(b, { reserveBottom: window.innerWidth < 700 ? 0.15 : 0.08 });
-  }
-  if(state.audioOn){
-    const txt = String(b.text || '').trim();
-    if(txt) speak(txt);
-  }
+  applyBalloonFocus(b, { speak: true });
 }
 
 function setAudioOn(on){
@@ -4147,8 +4187,30 @@ function playNext(i){
   const marks = currentMarks();
   if(i>=marks.length){
     if(state.pageIndex < state.comic.pages.length-1){
-      state.pageIndex++; renderPage();
-      setTimeout(()=>{ setMode('play'); const m2=currentMarks(); if(m2.length) playNext(0); else stopPlay(); }, 450);
+      state.pageIndex++;
+      const first = marksSorted(state.pageIndex)[0] || null;
+      const genAtStart = state._pageLoadGen;
+      renderPage(first ? { focusBalloon: first, speak: false } : {});
+      const resumePlay = ()=>{
+        if(state.mode==='mark') return;
+        setMode('play');
+        const m2 = currentMarks();
+        if(!m2.length){ stopPlay(); return; }
+        playNext(0);
+      };
+      // Aguarda load (onload incrementa fluxo); timeout de segurança
+      let tries = 0;
+      const poll = ()=>{
+        tries++;
+        const img = $('#pageImg');
+        const ready = img && img.complete && img.naturalWidth > 0 && state._pageLoadGen !== genAtStart;
+        if(ready || tries > 40){
+          resumePlay();
+          return;
+        }
+        setTimeout(poll, 50);
+      };
+      setTimeout(poll, 30);
     } else { stopPlay(); toast('Fim do quadrinho.'); }
     return;
   }
