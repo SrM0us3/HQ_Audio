@@ -369,21 +369,46 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
   }
   @media (max-width:700px){
     body.mobile-editing #liteEditBar{
-      left:0;right:0;bottom:0;border-radius:16px 16px 0 0;
-      max-height:none;padding:12px 12px max(12px, env(safe-area-inset-bottom));
+      left:0;right:0;bottom:0;border-radius:14px 14px 0 0;
+      max-height:min(42vh, 340px);
+      padding:8px 10px max(8px, env(safe-area-inset-bottom));
       border-left:none;border-right:none;border-bottom:none;
+      gap:6px;
+      overflow:auto;
     }
+    /* preview compacto: sobra espaço para a HQ + teclado */
     body.mobile-editing #liteEditPreview{
-      max-height:min(38vh, 280px);
+      max-height:14vh;
     }
     body.mobile-editing #liteEditPreview img{
-      max-height:min(38vh, 280px);
+      max-height:14vh;
     }
     body.mobile-editing #liteEditBar textarea{
-      font-size:17px;min-height:72px;max-height:28vh;
+      font-size:16px; /* evita zoom automático no iOS */
+      min-height:48px;max-height:14vh;
+      padding:8px;
+    }
+    body.mobile-editing #liteEditBar .lite-actions button{
+      min-height:40px;padding:8px 6px;font-size:14px;
     }
     body.mobile-editing #liteEditBar .lite-order-row{display:none;}
     body.mobile-editing #liteEditClose{display:none;}
+    /* teclado aberto: ainda mais compacto */
+    body.mobile-editing.keyboard-open #liteEditPreview{
+      max-height:9vh;
+    }
+    body.mobile-editing.keyboard-open #liteEditPreview img{
+      max-height:9vh;
+    }
+    body.mobile-editing.keyboard-open #liteEditBar{
+      max-height:min(36vh, 280px);
+      gap:4px;
+      padding-top:6px;
+    }
+    body.mobile-editing.keyboard-open #liteEditBar textarea{
+      min-height:40px;max-height:11vh;
+    }
+    body.mobile-editing.keyboard-open #liteEditBar .lite-hint{display:none;}
   }
 
   .path-line{position:absolute;pointer-events:none;stroke:var(--gold);stroke-width:1;stroke-dasharray:3 4;fill:none;opacity:.4;}
@@ -440,13 +465,25 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
   #sheet{
     position:absolute;left:0;right:0;bottom:0;background:var(--panel);
     border-top:1px solid var(--border);border-radius:16px 16px 0 0;
-    max-height:60%;transform:translateY(105%);transition:transform .25s ease;
+    max-height:48%;transform:translateY(105%);transition:transform .25s ease;
     z-index:30;display:flex;flex-direction:column;
   }
   #sheet.open{transform:translateY(0);}
   .sheet-head{display:flex;align-items:center;padding:12px 16px;border-bottom:1px solid var(--border);}
   .sheet-head b{flex:1;}
   .sheet-body{padding:14px 16px;overflow-y:auto;}
+  @media (max-width:700px){
+    #sheet{max-height:36%;border-radius:14px 14px 0 0;}
+    .sheet-head{padding:8px 12px;}
+    .sheet-head b{font-size:14px;}
+    .sheet-body{padding:8px 10px 10px;}
+    .balloon-item{
+      padding:6px 8px;margin-bottom:5px;border-radius:8px;gap:6px;
+    }
+    .balloon-item .num-input{width:28px;height:26px;font-size:13px;border-radius:6px;}
+    .balloon-item .txt{font-size:12px;}
+    .balloon-item button{font-size:14px;padding:2px;}
+  }
   .balloon-item{
     display:flex;align-items:center;gap:8px;background:var(--panel-2);
     border:1px solid var(--border);border-radius:10px;padding:8px 10px;margin-bottom:8px;
@@ -2081,14 +2118,20 @@ function positionLiteEditBar(){
     const fromBottom = Math.max(0, window.innerHeight - visibleBottom);
     if(mobile){
       bar.style.bottom = fromBottom + 'px';
-      // limita altura da barra ao viewport visivel
-      const maxH = Math.max(200, vv.height - 8);
+      // teclado aberto → encolhe preview/texto para sobrar HQ na tela
+      const kbOpen = fromBottom > 50 || vv.height < window.innerHeight * 0.68;
+      document.body.classList.toggle('keyboard-open', kbOpen);
+      const maxH = kbOpen
+        ? Math.max(140, Math.min(vv.height * 0.42, vv.height - 6))
+        : Math.max(160, Math.min(vv.height * 0.42, 320));
       bar.style.maxHeight = maxH + 'px';
     } else {
+      document.body.classList.remove('keyboard-open');
       bar.style.bottom = (12 + fromBottom) + 'px';
       bar.style.maxHeight = '';
     }
   } else {
+    document.body.classList.remove('keyboard-open');
     bar.style.bottom = mobile ? '0px' : '76px';
   }
 }
@@ -2144,6 +2187,7 @@ function pauseAndEditWhileReading(b){
     document.body.classList.add('mobile-editing');
   } else {
     document.body.classList.remove('mobile-editing');
+  document.body.classList.remove('keyboard-open');
   }
   positionLiteEditBar();
   setTimeout(()=> {
