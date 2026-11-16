@@ -393,10 +393,38 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
     display:flex;align-items:center;gap:5px;padding:8px 8px;
     border-top:1px solid var(--border);background:var(--panel);flex-shrink:0;z-index:20;
     overflow-x:auto;
+    -webkit-overflow-scrolling:touch;
   }
   .ctrlbar .iconbtn{flex-shrink:0;}
   .ctrlbar .spacer{flex:1;min-width:4px;}
-  .pagepos{font-size:12px;color:var(--text-dim);min-width:40px;text-align:center;}
+  .pagepos{font-size:12px;color:var(--text-dim);min-width:40px;text-align:center;flex-shrink:0;}
+
+  /* Celular: tudo visível sem rolar a barra */
+  @media (max-width: 700px){
+    .ctrlbar{
+      gap:2px;
+      padding:6px 4px;
+      overflow-x:hidden;
+      justify-content:space-between;
+    }
+    .ctrlbar .iconbtn{
+      width:30px;height:30px;
+      font-size:13px;
+      border-radius:8px;
+      flex:0 0 30px;
+    }
+    .ctrlbar .spacer{display:none;}
+    .pagepos{min-width:34px;font-size:11px;padding:0 1px;}
+    /* Laterais da tela já avançam/voltam balão — libera espaço */
+    #btnBalloonPrev, #btnBalloonNext{display:none !important;}
+  }
+  @media (max-width: 380px){
+    .ctrlbar .iconbtn{width:28px;height:28px;flex-basis:28px;font-size:12px;}
+    .pagepos{min-width:30px;font-size:10px;}
+  }
+  @media (max-width: 700px){
+    body:not(.reader-marking) #btnFit{display:none !important;}
+  }
   .progress-wrap{padding:0 10px 6px;background:var(--panel);flex-shrink:0;}
   .progress-track{height:4px;background:var(--panel-2);border-radius:4px;overflow:hidden;}
   .progress-fill{height:100%;width:0%;background:var(--gold);border-radius:4px;transition:width .2s ease;}
@@ -2196,15 +2224,29 @@ async function placeBalloonInstant(x,y,w,h){
 }
 function setMode(m){
   state.mode=m;
+  document.body.classList.toggle('reader-marking', m==='mark');
+  document.body.classList.toggle('reader-playing', m==='play');
   $('#topSub').textContent = state.comic ? (m==='mark'?'marcando balões':m==='play'?'reproduzindo…':state.comic.name) : '';
   $('#btnMark').classList.toggle('on', m==='mark');
   $('#btnPlay').classList.toggle('on', m==='play');
   $('#btnPlay').textContent = m==='play' ? '⏸' : '▶';
   $('#btnPlay').title = m==='play' ? 'Pausar' : (state.playPauseIndex!=null ? 'Retomar' : 'Reproduzir');
+  // Ajustar à tela: útil, mas no celular estreito some no modo leitura (CSS pode ocultar)
   $('#btnFit').style.display = 'flex';
   $('#btnDetect').style.display = m==='mark' ? 'flex' : 'none';
   $('#btnWalk').style.display = m==='mark' ? 'flex' : 'none';
   $('#btnReadZoom').style.display = m==='mark' ? 'none' : 'flex';
+  // No mark em tela estreita, esconde play/áudio/lista para caber 🪄🧭
+  const narrow = window.innerWidth < 700;
+  if(narrow && m==='mark'){
+    $('#btnPlay').style.display = 'none';
+    $('#btnAudio').style.display = 'none';
+    $('#btnList').style.display = 'none';
+  } else {
+    $('#btnPlay').style.display = 'flex';
+    $('#btnAudio').style.display = 'flex';
+    $('#btnList').style.display = 'flex';
+  }
   if(m==='mark') hideBalloonCard();
 }
 $('#btnReadZoom').addEventListener('click', async ()=>{
@@ -2294,14 +2336,14 @@ overlayEl.addEventListener('pointerdown', (e)=>{
     return;
   }
 
-  // Leitura: laterais = balão a balão (ANTES de setPointerCapture — senão o mouse no PC falha)
+  // Leitura: laterais ficam só no #stage (pointerup) — evita avanço duplo no celular
   if(state.mode !== 'mark'){
     if(state.paused) return;
+    // centro: só limpa destaque (laterais tratadas no stage)
     try{
       const stage = $('#stage').getBoundingClientRect();
       const rel = stage.width > 0 ? (e.clientX - stage.left) / stage.width : 0.5;
-      if(rel < 0.28){ goBalloonDelta(-1); return; }
-      if(rel > 0.72){ goBalloonDelta(1); return; }
+      if(rel < 0.28 || rel > 0.72) return; // stage cuida das laterais
     }catch(_){}
     if(state.activeBalloon){ clearHighlight(); }
     return;
@@ -3021,6 +3063,10 @@ function marksSorted(pageIndex){
 function goBalloonDelta(delta){
   if(!state.comic || state.mode==='mark') return;
   if(state.paused) return;
+  // anti-duplo toque (overlay+stage ou pointer+click no celular)
+  const now = Date.now();
+  if(state._balloonNavLock && (now - state._balloonNavLock) < 320) return;
+  state._balloonNavLock = now;
   if(state.mode==='play') stopPlay();
 
   let page = state.pageIndex|0;
