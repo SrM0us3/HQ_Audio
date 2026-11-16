@@ -2125,6 +2125,11 @@ function positionLiteEditBar(){
         ? Math.max(140, Math.min(vv.height * 0.42, vv.height - 6))
         : Math.max(160, Math.min(vv.height * 0.42, 320));
       bar.style.maxHeight = maxH + 'px';
+      // recentraliza o balão na área visível acima da barra/teclado
+      if(state.paused && state.pausedBalloon){
+        const reserve = Math.min(0.62, Math.max(0.28, (fromBottom + bar.getBoundingClientRect().height) / Math.max(1, window.innerHeight) + 0.04));
+        zoomToBalloon(state.pausedBalloon, { reserveBottom: reserve, margin: 0.9 });
+      }
     } else {
       document.body.classList.remove('keyboard-open');
       bar.style.bottom = (12 + fromBottom) + 'px';
@@ -2164,9 +2169,18 @@ function pauseAndEditWhileReading(b){
     }
   }
   hideBalloonCard();
-  resetZoom();
   state.activeBalloon = b.id;
-  drawBalloons();
+
+  // Celular: centraliza e amplia o balão na área acima da barra de edição
+  // PC: página legível + preview na barra (já suficiente)
+  if(isMobileEditLayout()){
+    // reserva ~42% embaixo para a barra (e teclado depois ajusta de novo)
+    zoomToBalloon(b, { reserveBottom: 0.42, margin: 0.92 });
+  } else {
+    resetZoom();
+    state.activeBalloon = b.id;
+    drawBalloons();
+  }
 
   const prev = $('#liteEditPreview');
   if(prev){
@@ -2188,6 +2202,14 @@ function pauseAndEditWhileReading(b){
   } else {
     document.body.classList.remove('mobile-editing');
   document.body.classList.remove('keyboard-open');
+  if(isMobileEditLayout()){
+    // volta visão geral da página ao sair da edição
+    try{
+      const keep = state.activeBalloon;
+      resetZoom();
+      if(keep){ state.activeBalloon = keep; drawBalloons(); }
+    }catch(_){}
+  }
   }
   positionLiteEditBar();
   setTimeout(()=> {
