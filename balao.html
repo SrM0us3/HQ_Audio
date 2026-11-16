@@ -522,12 +522,16 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
     margin-top:6px;gap:8px;align-items:center;justify-content:space-between;
   }
   .row.editor-extra button{flex:0 1 auto;padding:7px 10px;font-size:12px;}
+  .row.editor-extra .editor-extra-spacer{flex:1 1 0;min-width:40px;}
+  .row.editor-extra #btnAdjust{flex:0 0 auto;}
+  /* Excluir no centro da barra — longe do › Próximo */
   .row.editor-extra #btnDelBalloon{
-    margin-left:auto;flex:0 0 auto;
-    background:transparent;border:1px solid transparent;color:#a66;
-    font-size:11px;font-weight:500;padding:6px 8px;opacity:.75;
+    flex:0 0 auto;
+    margin:0 auto;
+    background:transparent;border:1px solid rgba(160,80,80,.35);color:#c88;
+    font-size:11px;font-weight:500;padding:6px 12px;opacity:.85;border-radius:8px;
   }
-  .row.editor-extra #btnDelBalloon:active{opacity:1;border-color:#a66;background:rgba(160,60,60,.12);}
+  .row.editor-extra #btnDelBalloon:active{opacity:1;background:rgba(160,60,60,.15);}
   @media (max-width:700px){
     #sheet.editing-balloon{max-height:42%;}
     .row.editor-nav button{padding:7px 2px;font-size:11px;min-height:40px;}
@@ -2042,18 +2046,37 @@ function zoomToBalloon(b, opts){
   const stage = $('#stage').getBoundingClientRect();
   const img = $('#pageImg');
   const dispW = img.offsetWidth, dispH = img.offsetHeight;
-  if(!dispW || !dispH) return;
+  if(!dispW || !dispH || stage.height < 40) return;
   const px=(b.x+b.w/2)*dispW, py=(b.y+b.h/2)*dispH;
-  const reserve = opts.reserveBottom || 0;
-  const visibleH = stage.height*(1-reserve);
-  // Guided view: balão ocupa boa parte da área útil, com margem
-  const margin = opts.margin != null ? opts.margin : 0.88;
-  const scale = Math.min(5, Math.max(1.25, Math.min(
-    (stage.width * margin) / Math.max(8, b.w*dispW),
-    (visibleH * margin) / Math.max(8, b.h*dispH)
-  )));
-  const tx = stage.width/2 - px*scale;
-  const ty = visibleH/2 - py*scale;
+  const bw = Math.max(8, b.w*dispW), bh = Math.max(8, b.h*dispH);
+  // faixa visível (reserva topo/base para barras)
+  const topPad = opts.reserveTop != null ? opts.reserveTop : 0.02;
+  const reserve = Math.min(0.7, Math.max(0, opts.reserveBottom || 0));
+  const visibleTop = stage.height * topPad;
+  const visibleBottom = stage.height * (1 - reserve);
+  const visibleH = Math.max(60, visibleBottom - visibleTop);
+  const visibleMid = visibleTop + visibleH * 0.45; // um pouco acima do centro da faixa
+  const margin = opts.margin != null ? opts.margin : 0.85;
+  // escala moderada — evita empurrar o balão para fora da tela
+  let scale = Math.min(
+    (stage.width * margin) / bw,
+    (visibleH * margin) / bh
+  );
+  scale = Math.min(3.0, Math.max(1.15, scale));
+  let tx = stage.width/2 - px*scale;
+  let ty = visibleMid - py*scale;
+  // Garante que o centro do balão fique DENTRO da faixa visível
+  let cy = py*scale + ty;
+  const minY = visibleTop + Math.min(bh*scale*0.35, visibleH*0.2);
+  const maxY = visibleBottom - Math.min(bh*scale*0.35, visibleH*0.2);
+  if(cy < minY) ty += (minY - cy);
+  if(cy > maxY) ty -= (cy - maxY);
+  // horizontal: evita sumir nas laterais
+  let cx = px*scale + tx;
+  const minX = bw*scale*0.3;
+  const maxX = stage.width - bw*scale*0.3;
+  if(cx < minX) tx += (minX - cx);
+  if(cx > maxX) tx -= (cx - maxX);
   state.viewTransform = {scale,tx,ty};
   applyViewTransform(true);
   state.activeBalloon=b.id;
@@ -3381,16 +3404,29 @@ async function deleteBalloon(b){
 function rezoomEditingBalloon(){
   const b = state.editingBalloon || state.pausedBalloon;
   if(!b || !state.comic) return;
+  const stage = $('#stage');
+  if(!stage) return;
+  const stageRect = stage.getBoundingClientRect();
   const sheet = $('#sheet');
   const sheetOpen = sheet && sheet.classList.contains('open');
-  const sheetH = sheetOpen ? sheet.getBoundingClientRect().height : 0;
-  const vv = window.visualViewport;
-  const fromBottom = vv ? Math.max(0, window.innerHeight - (vv.height + vv.offsetTop)) : 0;
+  let overlap = 0;
+  if(sheetOpen){
+    const sr = sheet.getBoundingClientRect();
+    overlap = Math.max(0, stageRect.bottom - sr.top);
+  }
   const bar = $('#liteEditBar');
-  const liteH = (bar && bar.style.display !== 'none') ? bar.getBoundingClientRect().height : 0;
-  const bottomUI = Math.max(sheetH, liteH) + fromBottom;
-  const reserve = Math.min(0.72, Math.max(0.28, bottomUI / Math.max(1, window.innerHeight) + 0.04));
-  zoomToBalloon(b, { reserveBottom: reserve, margin: 0.9 });
+  if(bar && bar.style.display !== 'none'){
+    const br = bar.getBoundingClientRect();
+    overlap = Math.max(overlap, stageRect.bottom - br.top);
+  }
+  const vv = window.visualViewport;
+  if(vv){
+    const visibleBottom = vv.height + vv.offsetTop;
+    // quanto do stage ficou abaixo da área visível (teclado)
+    overlap = Math.max(overlap, stageRect.bottom - visibleBottom);
+  }
+  const reserve = Math.min(0.62, Math.max(0.22, (overlap + 12) / Math.max(1, stageRect.height)));
+  zoomToBalloon(b, { reserveBottom: reserve, margin: 0.82, reserveTop: 0.03 });
 }
 
 function openBalloonEditor(b, isNew){
@@ -3412,6 +3448,7 @@ function openBalloonEditor(b, isNew){
     <div class="row editor-extra">
       <button type="button" id="btnAdjust">⤢ Ajustar</button>
       <button type="button" id="btnDelBalloon" title="Apagar este balão">Excluir</button>
+      <span class="editor-extra-spacer" aria-hidden="true"></span>
     </div>
   `;
   const sheet = $('#sheet');
