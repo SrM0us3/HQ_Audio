@@ -140,7 +140,13 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
     background:var(--panel-2);border:1px solid var(--border);color:var(--text);
     width:32px;height:32px;border-radius:9px;font-size:14px;
     display:flex;align-items:center;justify-content:center;cursor:pointer;
+    padding:0;line-height:1;
   }
+  .iconbtn svg{
+    width:18px;height:18px;display:block;flex-shrink:0;
+    stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round;
+  }
+  .iconbtn svg.icon-fill{fill:currentColor;stroke:none;}
   .iconbtn:active{transform:scale(.94);}
   .iconbtn.on{background:var(--accent);border-color:var(--accent);}
   .iconbtn:disabled{opacity:.4;pointer-events:none;}
@@ -573,8 +579,8 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
 
   <div class="topbar">
     <div class="topbar-row1">
-      <button class="iconbtn" id="btnHome" type="button" title="Início do Leitor / atualizar">🏠</button>
-      <button type="button" class="iconbtn top-back" id="btnNavBack" title="Voltar" style="display:none">←</button>
+      <button class="iconbtn" id="btnHome" type="button" title="Início do Leitor / atualizar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 10.5L12 3l9 7.5"/><path d="M5 10v10h14V10"/><path d="M10 20v-6h4v6"/></svg></button>
+      <button type="button" class="iconbtn top-back" id="btnNavBack" title="Voltar" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
       <div class="brand">BALÃO</div>
       <div class="top-title sub" id="topSub" style="display:none"></div>
       <div class="top-tabs" id="topTabs">
@@ -582,8 +588,8 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
         <button type="button" data-tab="biblioteca" id="tabBiblioteca">Biblioteca</button>
       </div>
       <div class="topbar-actions">
-        <button class="iconbtn" id="btnDownload" title="Baixar CBZ com marcações" style="display:none">⬇</button>
-        <button class="iconbtn" id="btnSettings" type="button" title="Configurações" onclick="try{if(window.__openSettings){window.__openSettings();}else{alert('Balão: recarregue a página com cache limpo (versão antiga).');}}catch(e){alert('Erro ⚙: '+e);}return false;">⚙</button>
+        <button class="iconbtn" id="btnDownload" title="Baixar CBZ com marcações" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12"/><path d="M7 12l5 5 5-5"/><path d="M5 20h14"/></svg></button>
+        <button class="iconbtn" id="btnSettings" type="button" title="Configurações" onclick="try{if(window.__openSettings){window.__openSettings();}else{alert('Balão: recarregue a página com cache limpo (versão antiga).');}}catch(e){alert('Erro config: '+e);}return false;"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg></button>
       </div>
     </div>
     <div class="topbar-row2" id="topbarRow2" style="display:none">
@@ -675,26 +681,26 @@ Não remover o Leitor em mudanças futuras sem backup deste ponto.
       <div class="progress-track"><div class="progress-fill" id="readProgress"></div></div>
     </div>
     <div class="ctrlbar">
-      <button class="iconbtn" id="btnPrev" title="Página anterior">‹</button>
+      <button class="iconbtn" id="btnPrev" title="Página anterior"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg></button>
       <div class="pagepos" id="pagePos">1/1</div>
-      <button class="iconbtn" id="btnNext" title="Próxima página">›</button>
-      <button class="iconbtn" id="btnBalloonPrev" title="Balão anterior (ou toque na esquerda da página)">⌜</button>
-      <button class="iconbtn" id="btnBalloonNext" title="Próximo balão (ou toque na direita da página)">⌝</button>
+      <button class="iconbtn" id="btnNext" title="Próxima página"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg></button>
+      <button class="iconbtn" id="btnBalloonPrev" title="Balão anterior (ou toque na esquerda da página)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M14 6l-6 6 6 6"/><path d="M18 6l-6 6 6 6"/></svg></button>
+      <button class="iconbtn" id="btnBalloonNext" title="Próximo balão (ou toque na direita da página)"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6l6 6-6 6"/><path d="M6 6l6 6-6 6"/></svg></button>
       <div class="spacer"></div>
-      <button class="iconbtn" id="btnFit" title="Ajustar à tela" style="display:none">⤢</button>
-      <button class="iconbtn" id="btnDetect" title="Detectar balões automaticamente" style="display:none">🪄</button>
-      <button class="iconbtn" id="btnWalk" title="Ajustar tamanhos em sequência" style="display:none">🧭</button>
-      <button class="iconbtn" id="btnMark" title="Marcar balões">✎</button>
-      <button class="iconbtn" id="btnReadZoom" title="Zoom só no balão (página permanece fixa)">🔍</button>
-      <button class="iconbtn" id="btnAudio" title="Áudio ao navegar balões">🔊</button>
-      <button class="iconbtn" id="btnPlay" title="Reproduzir tudo com áudio">▶</button>
-      <button class="iconbtn" id="btnList" title="Balões">☰</button>
+      <button class="iconbtn" id="btnFit" title="Ajustar à tela" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 4H4v4M16 4h4v4M8 20H4v-4M16 20h4v-4"/></svg></button>
+      <button class="iconbtn" id="btnDetect" title="Detectar balões automaticamente" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/><path d="M11 8v6M8 11h6"/></svg></button>
+      <button class="iconbtn" id="btnWalk" title="Ajustar tamanhos em sequência" style="display:none"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h12M4 18h8"/></svg></button>
+      <button class="iconbtn" id="btnMark" title="Marcar balões"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 20l4.5-1.2L19 8.3a2 2 0 0 0 0-2.8L18.5 5a2 2 0 0 0-2.8 0L5.2 15.5 4 20z"/><path d="M13.5 7.5l3 3"/></svg></button>
+      <button class="iconbtn" id="btnReadZoom" title="Zoom só no balão (página permanece fixa)"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/><path d="M11 8v6M8 11h6"/></svg></button>
+      <button class="iconbtn" id="btnAudio" title="Áudio ao navegar balões"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l5 4V6L7 10H4z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 7a7 7 0 0 1 0 10"/></svg></button>
+      <button class="iconbtn" id="btnPlay" title="Reproduzir tudo com áudio"><svg viewBox="0 0 24 24" aria-hidden="true" class="icon-fill"><path d="M8 5v14l12-7z"/></svg></button>
+      <button class="iconbtn" id="btnList" title="Balões"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg></button>
     </div>
 
-    <div id="sheet">
+    <div id="sheet">    <div id="sheet">
       <div class="sheet-head">
         <b id="sheetTitle">Balões desta página</b>
-        <button class="iconbtn" id="btnCloseSheet">✕</button>
+        <button class="iconbtn" id="btnCloseSheet" title="Fechar"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
       </div>
       <div class="sheet-body" id="sheetBody"></div>
     </div>
@@ -892,6 +898,21 @@ const state = {
 };
 
 const $ = s => document.querySelector(s);
+
+/* Ícones SVG universais (sem emoji — compatível com Via e outros) */
+const ICO = {
+  play: '<svg viewBox="0 0 24 24" aria-hidden="true" class="icon-fill"><path d="M8 5v14l12-7z"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" aria-hidden="true" class="icon-fill"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>',
+  audioOn: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l5 4V6L7 10H4z"/><path d="M16 9a4 4 0 0 1 0 6"/><path d="M18.5 7a7 7 0 0 1 0 10"/></svg>',
+  audioOff: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 10v4h3l5 4V6L7 10H4z"/><path d="M18 10l4 4M22 10l-4 4"/></svg>',
+  detect: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6"/><path d="M20 20l-4-4"/><path d="M11 8v6M8 11h6"/></svg>',
+  wait: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v5l3 2"/></svg>'
+};
+function setBtnIcon(el, key){
+  if(!el || !ICO[key]) return;
+  el.innerHTML = ICO[key];
+}
+
 function toast(msg,ms=2000){
   const toastEl = $('#toast');
   if(!toastEl){ console.log('[toast]', msg); return; }
@@ -2379,7 +2400,7 @@ function setMode(m){
   $('#topSub').textContent = state.comic ? (m==='mark'?'marcando balões':m==='play'?'reproduzindo…':state.comic.name) : '';
   $('#btnMark').classList.toggle('on', m==='mark');
   $('#btnPlay').classList.toggle('on', m==='play');
-  $('#btnPlay').textContent = m==='play' ? '⏸' : '▶';
+  setBtnIcon($('#btnPlay'), m==='play' ? 'pause' : 'play');
   $('#btnPlay').title = m==='play' ? 'Pausar' : (state.playPauseIndex!=null ? 'Retomar' : 'Reproduzir');
   // Ajustar à tela: útil, mas no celular estreito some no modo leitura (CSS pode ocultar)
   $('#btnFit').style.display = 'flex';
@@ -3064,7 +3085,7 @@ function orderBalloonsLikeComics(cands, rtl){
 async function detectBalloons(){
   if(!state.comic) return;
   const btn = $('#btnDetect');
-  btn.disabled = true; const oldTxt = btn.textContent; btn.textContent='⏳';
+  btn.disabled = true; const oldHtml = btn.innerHTML; setBtnIcon(btn, 'wait');
   try{
     if(!yoloSessionPromise && !yoloModelBuffer){ toast('Carregando detector de balões…', 3000); }
     toastProgress('Carregando modelo de detecção de balões (só na primeira vez nesta sessão)…');
@@ -3162,14 +3183,14 @@ async function detectBalloons(){
       yoloSessionPromise = null;
       // mantém yoloModelBuffer se já baixou — só recompila sessão
       toast('Detectando de novo…', 2500);
-      btn.disabled = false; btn.textContent = oldTxt;
+      btn.disabled = false; btn.innerHTML = oldHtml;
       setTimeout(()=> detectBalloons(), 400);
       return;
     }
     state._yoloRetried = false;
     toast('Erro ao detectar: '+msg, 6000);
   }finally{
-    btn.disabled=false; btn.textContent=oldTxt;
+    btn.disabled=false; btn.innerHTML=oldHtml;
   }
 }
 $('#btnDetect').addEventListener('click', detectBalloons);
@@ -3279,7 +3300,7 @@ function setAudioOn(on){
   const btn = $('#btnAudio');
   if(btn){
     btn.classList.toggle('on', state.audioOn);
-    btn.textContent = state.audioOn ? '🔊' : '🔇';
+    setBtnIcon(btn, state.audioOn ? 'audioOn' : 'audioOff');
     btn.title = state.audioOn
       ? 'Áudio ligado (clique/navegação de balão fala)'
       : 'Áudio desligado (só destaca; Play ainda usa voz)';
